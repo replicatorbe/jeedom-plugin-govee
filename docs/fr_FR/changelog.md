@@ -1,5 +1,12 @@
 # Changelog — plugin Govee LAN
 
+## 0.2.0 (beta)
+
+- Effets de l'application Govee : commande « Lancer un effet » (111 effets
+  sur le H60B0), envoyés en local. Catalogue livré pour le H60B0,
+  téléchargé pour les autres modèles, mis à jour par un bouton.
+- Commande info « Effet » : dernier effet lancé.
+
 ## 0.1.0 (beta)
 
 - Première version : pilotage local des lampes Govee par l'API LAN, sans

@@ -39,6 +39,8 @@ le fait seule pour les lampes du réseau de Jeedom).
 | Régler la couleur | couleur | |
 | Régler le blanc | curseur en kelvins | 2000–9000 K, 2700–6500 K sur un Uplighter |
 | Rafraîchir | action | relève l'état tout de suite |
+| Effet | info | dernier effet lancé par Jeedom |
+| Lancer un effet | liste | effets de l'application Govee |
 | Envoyer des trames | message | trames `ptReal` brutes, en hexadécimal |
 
 L'état est relevé par le démon toutes les 10 secondes (réglable) et juste
@@ -68,6 +70,29 @@ et la **vitesse de l'effet** projeté (0 = arrêté, 100 = rapide).
   couleur) reste, lui, relu sur la lampe.
 - Allumer une zone allume aussi la lampe.
 
+### Effets
+
+La commande **Lancer un effet** propose les effets (« scènes ») de
+l'application Govee : 111 sur le H60B0 (Aurora, Ocean, Bonfire, Starry Sky,
+Christmas…). Ils partent en local, comme le reste : seule leur description
+vient de la bibliothèque publique de Govee, sans compte.
+
+- Le catalogue du H60B0 est livré avec le plugin. Pour un autre modèle, il
+  est téléchargé à la création de l'équipement.
+- Le bouton **Mettre à jour les effets**, dans l'équipement, récupère les
+  effets ajoutés depuis par Govee.
+- En scénario, l'effet se choisit dans la liste, ou par son nom exact
+  (`Ocean`).
+- La lampe ne dit pas quel effet tourne : la commande info **Effet** montre
+  le dernier lancé par Jeedom. Elle se vide quand une couleur ou un blanc est
+  réglé.
+- Les effets DIY créés dans l'application, et le mode musique, ne sont pas
+  accessibles : ils restent sur le compte Govee.
+
+Sur le H60B0, l'encodage des effets a été vérifié sur la lampe. Pour les
+autres modèles, il suit celui de govee2mqtt, sans essai : un effet qui ne
+fait rien se signale.
+
 ### Envoyer des trames
 
 Pour expérimenter : une trame par ligne (ou séparées par `;`), en
@@ -95,4 +120,6 @@ fois par minute.
 
 Les codes des zones de l'Uplighter viennent du projet
 [govee-lan-bridge](https://github.com/SamWiIIiams/govee-lan-bridge), qui les
-a relevés sur le trafic Bluetooth de l'application Govee.
+a relevés sur le trafic Bluetooth de l'application Govee. L'encodage des
+effets s'appuie sur [govee2mqtt](https://github.com/wez/govee2mqtt) et les
+notes de [AlgoClaw/Govee](https://github.com/AlgoClaw/Govee).

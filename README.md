@@ -7,6 +7,8 @@ LAN de Govee : sans cloud, sans compte, sans clé API.
 - Ajout par recherche multicast ou par adresse IP (lampes sur un autre VLAN).
 - Lampadaire **Uplighter H60B0** : chaque zone pilotée à part, et vitesse de
   l'effet projeté.
+- **Effets de l'application Govee** (Aurora, Ocean, Bonfire…), lancés en
+  local.
 
 Documentation : [docs/fr_FR/index.md](docs/fr_FR/index.md).
 

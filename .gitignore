@@ -18,3 +18,6 @@ test.php
 .DS_Store
 Thumbs.db
 *.php~
+
+# Catalogues d'effets téléchargés à l'exécution
+/data/

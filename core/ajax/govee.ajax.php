@@ -57,6 +57,15 @@ try {
                 continue;
             }
             $eqLogic = govee::createFromScan($found);
+            /* Modèle sans catalogue livré : le télécharger une fois. */
+            if ($found['sku'] !== '' && empty(govee::sceneCatalogue($found['sku']))) {
+                try {
+                    govee::fetchScenes($found['sku']);
+                    $eqLogic->createCommands();
+                } catch (Throwable $e) {
+                    log::add('govee', 'info', $eqLogic->getHumanName() . ' : ' . $e->getMessage());
+                }
+            }
             try {
                 $eqLogic->refresh();
             } catch (Throwable $e) {
@@ -74,6 +83,21 @@ try {
         ajax::success();
     }
 
+    /* Met à jour le catalogue d'effets du modèle depuis la bibliothèque
+     * Govee, puis la liste de la commande « Lancer un effet ». */
+    if (init('action') == 'scenes') {
+        unautorizedInDemo();
+        $eqLogic = goveeEq();
+        $sku = (string) $eqLogic->getConfiguration('sku', '');
+        $count = govee::fetchScenes($sku);
+        foreach (eqLogic::byType('govee') as $other) {
+            if (strcasecmp((string) $other->getConfiguration('sku', ''), $sku) === 0) {
+                $other->createCommands();
+            }
+        }
+        ajax::success(array('count' => $count));
+    }
+
     /* Dernier état brut renvoyé par la lampe, pour le diagnostic. */
     if (init('action') == 'data') {
         $eqLogic = goveeEq();
@@ -82,6 +106,7 @@ try {
             'status'     => $eqLogic->getCache('last_status', null),
             'status_at'  => (int) $eqLogic->getCache('last_status_at', 0),
             'uplighter'  => $eqLogic->isUplighter(),
+            'scenes'     => count(govee::sceneCatalogue((string) $eqLogic->getConfiguration('sku', ''))),
             'daemon'     => govee::deamon_info()['state'] == 'ok',
         ));
     }

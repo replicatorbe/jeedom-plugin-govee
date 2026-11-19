@@ -72,6 +72,11 @@ class govee extends eqLogic {
     /* Plage de l'API LAN pour les autres modèles. */
     const GENERIC_K = array(2000, 9000);
 
+    /* Bibliothèque publique des effets (« scènes ») de l'application Govee,
+     * par modèle. Lue sans compte : seule la description des effets en vient,
+     * leur envoi reste local. */
+    const SCENES_URL = 'https://app2.govee.com/appsku/v1/light-effect-libraries?sku=';
+
     /* ================================================================ CRON */
 
     /* Démon arrêté : le cron relève lui-même l'état, une fois par minute. */
@@ -525,6 +530,20 @@ class govee extends eqLogic {
         $this->addCmdIfMissing('frames', 'Envoyer des trames', 'action', 'message', array(
             'order' => 107, 'display' => array('title_disable' => 1, 'message_placeholder' => '33 30 01 01')));
 
+        /* Effets : seulement si le catalogue du modèle est connu. La liste
+         * suit le catalogue, mis à jour depuis la page de l'équipement. */
+        $scenes = self::sceneCatalogue((string) $this->getConfiguration('sku', ''));
+        if (!empty($scenes)) {
+            $scene = $this->addCmdIfMissing('scene', 'Effet', 'info', 'string', array('order' => 5));
+            $set = $this->addCmdIfMissing('scene_set', 'Lancer un effet', 'action', 'select', array(
+                'order' => 108, 'isVisible' => 1, 'value' => $scene));
+            $list = self::sceneListValue($scenes);
+            if ((string) $set->getConfiguration('listValue', '') !== $list) {
+                $set->setConfiguration('listValue', $list);
+                $set->save();
+            }
+        }
+
         if ($this->isUplighter()) {
             $order = 10;
             foreach (self::ZONES as $zone => $spec) {
@@ -810,6 +829,165 @@ class govee extends eqLogic {
         return self::frame($bytes);
     }
 
+    /* ============================================================ EFFETS */
+
+    /* Catalogue téléchargé (data/scenes), sinon celui livré avec le plugin
+     * (core/config/scenes). */
+    private static function sceneFiles($_sku) {
+        $sku = preg_replace('/[^A-Z0-9]/', '', strtoupper((string) $_sku));
+        if ($sku === '') {
+            return array();
+        }
+        return array(
+            __DIR__ . '/../../data/scenes/' . $sku . '.json',
+            __DIR__ . '/../config/scenes/' . $sku . '.json',
+        );
+    }
+
+    /* Liste des effets d'un modèle : code, nom, catégorie, paramètre
+     * (base64, vide pour un effet intégré à la lampe). */
+    public static function sceneCatalogue($_sku) {
+        static $cache = array();
+        $key = strtoupper((string) $_sku);
+        if (isset($cache[$key])) {
+            return $cache[$key];
+        }
+        $scenes = array();
+        foreach (self::sceneFiles($_sku) as $file) {
+            if (!is_file($file)) {
+                continue;
+            }
+            $data = json_decode((string) file_get_contents($file), true);
+            if (is_array($data) && !empty($data['scenes']) && is_array($data['scenes'])) {
+                $scenes = $data['scenes'];
+                break;
+            }
+        }
+        return $cache[$key] = $scenes;
+    }
+
+    /* Valeurs d'une liste Jeedom : « code|nom » séparés par « ; ». Un nom
+     * présent deux fois prend sa catégorie. */
+    public static function sceneListValue($_scenes) {
+        $count = array();
+        foreach ($_scenes as $s) {
+            $n = strtolower($s['name']);
+            $count[$n] = isset($count[$n]) ? $count[$n] + 1 : 1;
+        }
+        $items = array();
+        foreach ($_scenes as $s) {
+            $label = $s['name'];
+            if ($count[strtolower($s['name'])] > 1) {
+                $label .= ' (' . $s['category'] . ')';
+            }
+            $items[] = (int) $s['code'] . '|' . str_replace(array('|', ';'), array('/', ','), $label);
+        }
+        return implode(';', $items);
+    }
+
+    /* Télécharge le catalogue d'un modèle et le range dans data/scenes. */
+    public static function fetchScenes($_sku) {
+        $sku = preg_replace('/[^A-Z0-9]/', '', strtoupper((string) $_sku));
+        if ($sku === '') {
+            throw new Exception(__('Modèle de lampe inconnu : lancez d\'abord une recherche.', __FILE__));
+        }
+        $http = new com_http(self::SCENES_URL . rawurlencode($sku));
+        $http->setHeader(array('AppVersion: 9999999', 'Accept: application/json'));
+        $data = json_decode((string) $http->exec(15, 1), true);
+        if (!is_array($data) || !isset($data['data']['categories']) || !is_array($data['data']['categories'])) {
+            throw new Exception(__('Réponse inattendue de la bibliothèque d\'effets Govee.', __FILE__));
+        }
+        $scenes = array();
+        foreach ($data['data']['categories'] as $cat) {
+            foreach (isset($cat['scenes']) ? $cat['scenes'] : array() as $s) {
+                foreach (isset($s['lightEffects']) ? $s['lightEffects'] : array() as $e) {
+                    if (!isset($e['sceneCode'])) {
+                        continue;
+                    }
+                    $param = isset($e['scenceParam']) ? (string) $e['scenceParam'] : '';
+                    if ($param !== '' && base64_decode($param, true) === false) {
+                        continue;
+                    }
+                    $name = self::cleanText((string) $s['sceneName'] . (!empty($e['scenceName']) ? ' ' . $e['scenceName'] : ''), 64);
+                    $scenes[] = array(
+                        'code'     => (int) $e['sceneCode'],
+                        'name'     => $name !== '' ? $name : '#' . (int) $e['sceneCode'],
+                        'category' => self::cleanText(isset($cat['categoryName']) ? (string) $cat['categoryName'] : '', 64),
+                        'param'    => $param,
+                    );
+                }
+            }
+        }
+        if (empty($scenes)) {
+            throw new Exception(__('Govee ne publie aucun effet pour ce modèle :', __FILE__) . ' ' . $sku);
+        }
+        $dir = __DIR__ . '/../../data/scenes';
+        if (!is_dir($dir) && !mkdir($dir, 0775, true)) {
+            throw new Exception(__('Impossible de créer le dossier', __FILE__) . ' ' . $dir);
+        }
+        $json = json_encode(array('sku' => $sku, 'fetched' => date('Y-m-d'), 'scenes' => $scenes), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (file_put_contents($dir . '/' . $sku . '.json', $json) === false) {
+            throw new Exception(__('Impossible d\'écrire le catalogue d\'effets.', __FILE__));
+        }
+        return count($scenes);
+    }
+
+    public function findScene($_value) {
+        $value = trim((string) $_value);
+        $scenes = self::sceneCatalogue((string) $this->getConfiguration('sku', ''));
+        foreach ($scenes as $s) {
+            if ((string) $s['code'] === $value) {
+                return $s;
+            }
+        }
+        /* Par le nom aussi, pour les scénarios. */
+        foreach ($scenes as $s) {
+            if (strcasecmp($s['name'], $value) === 0) {
+                return $s;
+            }
+        }
+        throw new Exception(__('Effet inconnu pour ce modèle :', __FILE__) . ' ' . $value);
+    }
+
+    /*
+     * Trames d'un effet. Un effet intégré à la lampe (paramètre vide) tient en
+     * une trame « 33 05 04 code ». Les autres envoient d'abord leur
+     * description en plusieurs trames « a3 » :
+     *
+     *   a3 00 01 <nb de trames> <données…>, a3 01 <données…>, …, a3 ff <fin>
+     *
+     * Sur un H60B0, la description de la bibliothèque (51, longueur, 0a, …)
+     * s'envoie sous la forme 5a, longueur moins un, sans le 0a : vérifié sur la
+     * lampe. Pour les autres modèles, préfixe 02, comme govee2mqtt.
+     */
+    public static function sceneFrames($_code, $_param) {
+        $code = (int) $_code;
+        $mode = self::frame(array(0x33, 0x05, 0x04, $code & 0xFF, ($code >> 8) & 0xFF));
+        $param = (string) $_param === '' ? '' : base64_decode((string) $_param, true);
+        if ($param === false || $param === '') {
+            return array($mode);
+        }
+        $bytes = array_values(unpack('C*', $param));
+        if (count($bytes) > 4 && $bytes[0] === 0x51 && $bytes[3] === 0x0A) {
+            $len = (($bytes[1] << 8) | $bytes[2]) - 1;
+            $body = array_merge(array(0x5A, ($len >> 8) & 0xFF, $len & 0xFF), array_slice($bytes, 4));
+        } else {
+            $body = array_merge(array(0x02), $bytes);
+        }
+        $lines = (int) ceil((count($body) + 2) / 17);
+        if ($lines > 254) {
+            throw new Exception(__('Effet trop long.', __FILE__));
+        }
+        $chunks = array_chunk(array_merge(array(0x01, $lines), $body), 17);
+        $frames = array();
+        foreach ($chunks as $i => $chunk) {
+            $index = ($i === count($chunks) - 1) ? 0xFF : $i;
+            $frames[] = self::frame(array_merge(array(0xA3, $index), $chunk));
+        }
+        $frames[] = $mode;
+        return $frames;
+    }
+
     /* ========================================================= ACTIONS */
 
     public function runAction($_logicalId, $_options) {
@@ -823,6 +1001,12 @@ class govee extends eqLogic {
         }
         if (preg_match('/^zone_(top|side|bottom)_(on|off|brightness_set|colortemp_set|color_set)$/', $_logicalId, $m)) {
             $this->zoneAction($m[1], $m[2], $_options);
+            return;
+        }
+        if ($_logicalId === 'scene_set') {
+            $scene = $this->findScene(isset($_options['select']) ? $_options['select'] : '');
+            $this->send(self::ptReal(array_merge(array(self::fPower(true)), self::sceneFrames($scene['code'], $scene['param']))));
+            $this->publishValues(array('state' => 1, 'scene' => $scene['name']));
             return;
         }
         if ($_logicalId === 'flow_set') {
@@ -867,7 +1051,7 @@ class govee extends eqLogic {
                     $msgs[] = self::msg('turn', array('value' => 1));
                 }
                 $msgs[] = self::msg('colorwc', array('color' => array('r' => $rgb[0], 'g' => $rgb[1], 'b' => $rgb[2]), 'colorTemInKelvin' => 0));
-                $values += array('state' => 1, 'color' => self::rgbToHex($rgb));
+                $values += array('state' => 1, 'color' => self::rgbToHex($rgb), 'scene' => '');
                 break;
             case 'colortemp_set':
                 list($kMin, $kMax) = $this->kelvinRange();
@@ -876,7 +1060,7 @@ class govee extends eqLogic {
                     $msgs[] = self::msg('turn', array('value' => 1));
                 }
                 $msgs[] = self::msg('colorwc', array('color' => array('r' => 0, 'g' => 0, 'b' => 0), 'colorTemInKelvin' => $k));
-                $values += array('state' => 1, 'colortemp' => $k, 'color' => self::rgbToHex(self::kelvinToRgb($k)));
+                $values += array('state' => 1, 'colortemp' => $k, 'color' => self::rgbToHex(self::kelvinToRgb($k)), 'scene' => '');
                 break;
             default:
                 return;
@@ -940,6 +1124,9 @@ class govee extends eqLogic {
         }
         $this->send(self::ptReal($frames));
         $this->zoneOrder($_zone, true);
+        if ($_action === 'color_set' || $_action === 'colortemp_set') {
+            $values['scene'] = '';
+        }
         $values['zone_' . $_zone . '_state'] = 1;
         $values['state'] = 1;
         $this->publishValues($values);

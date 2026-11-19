@@ -133,8 +133,22 @@ function goveeLoadData(_id) {
     if (String(data.id) !== String(goveeCurrentId())) { return }
     goveeText('pre_goveeRaw', data.status ? JSON.stringify(data.status, null, 2) : '{{Aucun état reçu pour le moment.}}')
     goveeText('span_goveeProfile', data.uplighter ? '{{Uplighter, trois zones}}' : '{{Lampe simple}}')
+    goveeText('span_goveeScenes', data.scenes > 0 ? data.scenes + ' {{effets disponibles}}' : '{{Aucun effet connu pour ce modèle}}')
     var when = data.status_at > 0 ? new Date(data.status_at * 1000).toLocaleString() : ''
     goveeText('span_goveeStatus', (data.daemon ? '{{Démon en marche}}' : '{{Démon arrêté}}') + (when ? ' · {{dernier état}} ' + when : ''))
+  })
+}
+
+function goveeScenes() {
+  var id = goveeCurrentId()
+  if (id === '') { return }
+  goveeText('span_goveeScenes', '{{Téléchargement…}}')
+  goveeAjax('scenes', { id: id }, function (result) {
+    jeedomUtils.showAlert({ message: result.result.count + ' {{effets. La liste de la commande « Lancer un effet » est à jour.}}', level: 'success' })
+    goveeLoadData(id)
+  }, function (error) {
+    goveeText('span_goveeScenes', '')
+    jeedomUtils.showAlert({ message: goveeEscape(error.result || error.responseText || '{{Erreur}}'), level: 'danger' })
   })
 }
 
@@ -147,6 +161,7 @@ function printEqLogic(_eqLogic) {
   goveeText('pre_goveeRaw', '')
   goveeText('span_goveeStatus', '')
   goveeText('span_goveeProfile', '')
+  goveeText('span_goveeScenes', '')
   if (isset(_eqLogic.id) && _eqLogic.id !== '') {
     goveeLoadData(String(_eqLogic.id))
   }
@@ -219,7 +234,8 @@ window.goveeHandlers = {
       bt_goveeScan: goveeScanOpen,
       bt_goveeScanGo: goveeScan,
       bt_goveeSearchClose: function () { goveeEl('div_goveeSearch').style.display = 'none' },
-      bt_goveeRefresh: goveeRefresh
+      bt_goveeRefresh: goveeRefresh,
+      bt_goveeScenes: goveeScenes
     }
     for (var id in actions) {
       if (target.closest('#' + id) !== null) {

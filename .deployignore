@@ -1,2 +1,4 @@
 # Outils de développement, inutiles côté Jeedom.
 tests/
+# Catalogues d'effets téléchargés sur l'installation : jamais écrasés.
+/data/

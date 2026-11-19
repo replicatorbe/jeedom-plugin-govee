@@ -16,8 +16,10 @@ require_once $core;
 /* La classe charge le coeur par un chemin relatif valable seulement depuis
  * /var/www/html/plugins : on l'inclut sans ce require. */
 $copy = sys_get_temp_dir() . '/govee.test.' . getmypid() . '.php';
-file_put_contents($copy, preg_replace('#^\s*require_once .*core\.inc\.php.*$#m', '',
-    file_get_contents(__DIR__ . '/../core/class/govee.class.php')));
+/* __DIR__ garde le dossier de la classe, pour les catalogues d'effets. */
+file_put_contents($copy, str_replace('__DIR__', var_export(realpath(__DIR__ . '/../core/class'), true),
+    preg_replace('#^\s*require_once .*core\.inc\.php.*$#m', '',
+    file_get_contents(__DIR__ . '/../core/class/govee.class.php'))));
 register_shutdown_function(function () use ($copy) { @unlink($copy); });
 require_once $copy;
 
@@ -62,6 +64,28 @@ echo "Messages ptReal\n";
 $msgs = govee::ptReal(array_fill(0, 13, govee::fPower(true)));
 check('13 trames -> 2 datagrammes', count($msgs), 2);
 check('base64', json_decode($msgs[1], true)['msg']['data']['command'][0], base64_encode(govee::fPower(true)));
+
+echo "Effets\n";
+check('effet intégré (Rainbow)', bin2hex(implode('', govee::sceneFrames(3, ''))), '3305040300000000000000000000000000000031');
+/* Format H60B0 (5a), vérifié sur la lampe avec « Ocean ». */
+$ocean = null;
+foreach (govee::sceneCatalogue('H60B0') as $s) {
+    if ($s['name'] === 'Ocean') { $ocean = $s; }
+}
+check('catalogue H60B0 livré', $ocean !== null && count(govee::sceneCatalogue('H60B0')) > 100, true);
+check('Ocean (H60B0, 5a)', bin2hex(implode('', govee::sceneFrames($ocean['code'], $ocean['param']))),
+    'a30001095a006c0325000000010202cc1801bad5a3011414cc1903ba1414000014010773ff000050a302800000800000020001ff240000000102017ba303990003001414030014033916ff8b00ff39b3a30416ff1000cc0000e500010100ff1f00020590a305020201ff0003c914140000140107ff9c00e3a30600800000800000020001ff0022030a010073a307011e3200320001000a0100011e32003200aea3ff01000a0100011e32003200010000000000483305040b3600000000000000000000000000000f');
+/* Format générique (02) : vecteur de test de govee2mqtt (Forest, code 212). */
+check('Forest (générique, 02)', bin2hex(implode('', govee::sceneFrames(212, 'AyYAAQAKAgH/GQG0CgoCyBQF//8AAP//////AP//lP8AFAGWAAAAACMAAg8FAgH/FAH7AAAB+goEBP8AtP8AR///4/8AAAAAAAAAABoAAAABAgH/BQHIFBQC7hQBAP8AAAAAAAAAAA=='))),
+    str_replace(array(' ', "\n"), '', 'a3 00 01 07 02 03 26 00 01 00 0a 02 01 ff 19 01 b4 0a 0a d9
+a3 01 02 c8 14 05 ff ff 00 00 ff ff ff ff ff 00 ff ff 94 12
+a3 02 ff 00 14 01 96 00 00 00 00 23 00 02 0f 05 02 01 ff 0a
+a3 03 14 01 fb 00 00 01 fa 0a 04 04 ff 00 b4 ff 00 47 ff b3
+a3 04 ff e3 ff 00 00 00 00 00 00 00 00 1a 00 00 00 01 02 5d
+a3 05 01 ff 05 01 c8 14 14 02 ee 14 01 00 ff 00 00 00 00 92
+a3 ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 5c
+33 05 04 d4 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 e6'));
+check('liste : doublon suffixé de sa catégorie', strpos(govee::sceneListValue(govee::sceneCatalogue('H60B0')), 'Meditation (') !== false, true);
 
 echo "Décodage d'état (réponses réelles du H60B0)\n";
 check('blanc 2700 K', govee::statusValues(json_decode('{"onOff":1,"brightness":100,"color":{"r":0,"g":0,"b":0},"colorTemInKelvin":2700}', true)),

@@ -188,6 +188,14 @@ $eqLogics = eqLogic::byType($plugin->getId());
 									<span id="span_goveeStatus" style="margin-left:8px;"></span>
 								</div>
 							</div>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{Effets}}</label>
+								<div class="col-sm-9">
+									<span id="span_goveeScenes"></span>
+									<a class="btn btn-default btn-sm" id="bt_goveeScenes" style="margin-left:8px;"><i class="fas fa-magic"></i> {{Mettre à jour les effets}}</a>
+									<span class="help-block" style="margin:4px 0 0 0;">{{Les effets de l'application Govee, lancés en local par la commande « Lancer un effet ». La liste vient de la bibliothèque publique de Govee.}}</span>
+								</div>
+							</div>
 							<legend><i class="fas fa-code"></i> {{Dernier état renvoyé par la lampe}}</legend>
 							<pre id="pre_goveeRaw" style="max-height:300px;overflow:auto;"></pre>
 						</fieldset>
