@@ -70,6 +70,27 @@ et la **vitesse de l'effet** projeté (0 = arrêté, 100 = rapide).
   couleur) reste, lui, relu sur la lampe.
 - Allumer une zone allume aussi la lampe.
 
+### Mode musique (Uplighter)
+
+La lampe suit la musique captée par **son propre micro**, comme le mode
+musique de l'application.
+
+| Commande | Type | Rôle |
+|---|---|---|
+| Activer le mode musique | action | dernier mode choisi (Rythme au départ) |
+| Désactiver le mode musique | action | remet ce qui tournait avant : effet, blanc ou couleur |
+| Choisir le mode musique | liste | Rythme, Spectre, Éclosion, Scintillement, Sauts, Vortex, Lucioles, Flux |
+| Régler la sensibilité au son | curseur 0–100 | 50 % par défaut ; 100 réagit au moindre bruit |
+| Mode musique, Mode musique choisi, Sensibilité au son | info | dernier ordre envoyé par Jeedom |
+
+- Choisir un mode ou régler la sensibilité active la musique ; régler la
+  sensibilité alors qu'elle est arrêtée la retient pour la prochaine fois.
+- Régler une couleur, un blanc ou lancer un effet sort aussi du mode musique.
+- La lampe garde les réglages de chaque mode faits dans l'application
+  (palette, style) : Jeedom choisit le mode et la sensibilité.
+- Rythme et Spectre ont été vérifiés sur la lampe ; les autres modes
+  utilisent la même trame.
+
 ### Effets
 
 La commande **Lancer un effet** propose les effets (« scènes ») de

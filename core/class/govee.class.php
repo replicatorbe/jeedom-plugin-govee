@@ -77,6 +77,22 @@ class govee extends eqLogic {
      * leur envoi reste local. */
     const SCENES_URL = 'https://app2.govee.com/appsku/v1/light-effect-libraries?sku=';
 
+    /* Modes musique d'un Uplighter, au son de son micro intégré. Rythme et
+     * Spectre vérifiés sur la lampe ; les autres suivent la même trame. */
+    const MUSIC_MODES = array(
+        114 => 'Rythme',
+        131 => 'Spectre',
+        48  => 'Éclosion',
+        49  => 'Scintillement',
+        51  => 'Sauts',
+        80  => 'Vortex',
+        81  => 'Lucioles',
+        83  => 'Flux',
+    );
+    const MUSIC_DEFAULT = 114;
+    /* Sensibilité par défaut : 100 réagit au moindre bruit. */
+    const MUSIC_SENSITIVITY = 50;
+
     /* ================================================================ CRON */
 
     /* Démon arrêté : le cron relève lui-même l'état, une fois par minute. */
@@ -570,10 +586,33 @@ class govee extends eqLogic {
             $flow = $this->addCmdIfMissing('flow', 'Vitesse de l\'effet', 'info', 'numeric', array('order' => $order++, 'min' => 0, 'max' => 100));
             $this->addCmdIfMissing('flow_set', 'Régler la vitesse de l\'effet', 'action', 'slider', array(
                 'order' => 100 + $order++, 'isVisible' => 1, 'value' => $flow, 'min' => 0, 'max' => 100));
+
+            /* Mode musique : la lampe suit le son de son micro. */
+            $music = $this->addCmdIfMissing('music', 'Mode musique', 'info', 'binary', array('order' => $order++));
+            $musicMode = $this->addCmdIfMissing('music_mode', 'Mode musique choisi', 'info', 'string', array('order' => $order++));
+            $sens = $this->addCmdIfMissing('music_sensitivity', 'Sensibilité au son', 'info', 'numeric', array(
+                'order' => $order++, 'unite' => '%', 'min' => 0, 'max' => 100));
+            $this->addCmdIfMissing('music_on', 'Activer le mode musique', 'action', 'other', array(
+                'order' => 100 + $order++, 'isVisible' => 1, 'value' => $music));
+            $this->addCmdIfMissing('music_off', 'Désactiver le mode musique', 'action', 'other', array(
+                'order' => 100 + $order++, 'isVisible' => 1, 'value' => $music));
+            $set = $this->addCmdIfMissing('music_set', 'Choisir le mode musique', 'action', 'select', array(
+                'order' => 100 + $order++, 'isVisible' => 1, 'value' => $musicMode));
+            $list = array();
+            foreach (self::MUSIC_MODES as $code => $label) {
+                $list[] = $code . '|' . $label;
+            }
+            $list = implode(';', $list);
+            if ((string) $set->getConfiguration('listValue', '') !== $list) {
+                $set->setConfiguration('listValue', $list);
+                $set->save();
+            }
+            $this->addCmdIfMissing('music_sensitivity_set', 'Régler la sensibilité au son', 'action', 'slider', array(
+                'order' => 100 + $order++, 'isVisible' => 1, 'value' => $sens, 'min' => 0, 'max' => 100));
         } else {
             /* Profil changé : les commandes de zone n'ont plus d'objet. */
             foreach ($this->getCmd() as $cmd) {
-                if (preg_match('/^(zone_|flow)/', (string) $cmd->getLogicalId())) {
+                if (preg_match('/^(zone_|flow|music)/', (string) $cmd->getLogicalId())) {
                     $cmd->remove();
                 }
             }
@@ -1006,7 +1045,11 @@ class govee extends eqLogic {
         if ($_logicalId === 'scene_set') {
             $scene = $this->findScene(isset($_options['select']) ? $_options['select'] : '');
             $this->send(self::ptReal(array_merge(array(self::fPower(true)), self::sceneFrames($scene['code'], $scene['param']))));
-            $this->publishValues(array('state' => 1, 'scene' => $scene['name']));
+            $this->publishValues(array('state' => 1, 'scene' => $scene['name'], 'music' => 0));
+            return;
+        }
+        if (preg_match('/^music_(on|off|set|sensitivity_set)$/', $_logicalId, $m)) {
+            $this->musicAction($m[1], $_options);
             return;
         }
         if ($_logicalId === 'flow_set') {
@@ -1051,7 +1094,7 @@ class govee extends eqLogic {
                     $msgs[] = self::msg('turn', array('value' => 1));
                 }
                 $msgs[] = self::msg('colorwc', array('color' => array('r' => $rgb[0], 'g' => $rgb[1], 'b' => $rgb[2]), 'colorTemInKelvin' => 0));
-                $values += array('state' => 1, 'color' => self::rgbToHex($rgb), 'scene' => '');
+                $values += array('state' => 1, 'color' => self::rgbToHex($rgb), 'scene' => '', 'music' => 0);
                 break;
             case 'colortemp_set':
                 list($kMin, $kMax) = $this->kelvinRange();
@@ -1060,7 +1103,7 @@ class govee extends eqLogic {
                     $msgs[] = self::msg('turn', array('value' => 1));
                 }
                 $msgs[] = self::msg('colorwc', array('color' => array('r' => 0, 'g' => 0, 'b' => 0), 'colorTemInKelvin' => $k));
-                $values += array('state' => 1, 'colortemp' => $k, 'color' => self::rgbToHex(self::kelvinToRgb($k)), 'scene' => '');
+                $values += array('state' => 1, 'colortemp' => $k, 'color' => self::rgbToHex(self::kelvinToRgb($k)), 'scene' => '', 'music' => 0);
                 break;
             default:
                 return;
@@ -1126,10 +1169,115 @@ class govee extends eqLogic {
         $this->zoneOrder($_zone, true);
         if ($_action === 'color_set' || $_action === 'colortemp_set') {
             $values['scene'] = '';
+            $values['music'] = 0;
         }
         $values['zone_' . $_zone . '_state'] = 1;
         $values['state'] = 1;
         $this->publishValues($values);
+    }
+
+    /*
+     * Mode musique d'un Uplighter : « 33 05 13 mode sensibilité ». La lampe
+     * garde les réglages de chaque mode (palette, style) : seule la trame
+     * d'activation est envoyée. Une couleur, un blanc ou un effet en sortent ;
+     * « désactiver » remet ce qui tournait avant.
+     */
+    public static function fMusic($_mode, $_sensitivity) {
+        return self::frame(array(0x33, 0x05, 0x13, (int) $_mode & 0xFF, max(0, min(100, (int) $_sensitivity))));
+    }
+
+    public function musicAction($_action, $_options) {
+        if (!$this->isUplighter()) {
+            throw new Exception(__('Mode musique non pris en charge sur ce modèle.', __FILE__));
+        }
+        $active = (int) $this->info('music', 0) === 1;
+        $mode = $this->musicModeCode();
+        $sens = (int) $this->info('music_sensitivity', self::MUSIC_SENSITIVITY);
+        switch ($_action) {
+            case 'off':
+                if ($active) {
+                    $this->restoreBeforeMusic();
+                }
+                $this->publishValues(array('music' => 0));
+                return;
+            case 'set':
+                $value = trim((string) (isset($_options['select']) ? $_options['select'] : ''));
+                $mode = null;
+                foreach (self::MUSIC_MODES as $code => $label) {
+                    if ((string) $code === $value || strcasecmp($label, $value) === 0) {
+                        $mode = $code;
+                    }
+                }
+                if ($mode === null) {
+                    throw new Exception(__('Mode musique inconnu :', __FILE__) . ' ' . $value);
+                }
+                break;
+            case 'sensitivity_set':
+                $sens = max(0, min(100, (int) (isset($_options['slider']) ? $_options['slider'] : self::MUSIC_SENSITIVITY)));
+                if (!$active) {
+                    /* Retenue pour la prochaine activation. */
+                    $this->publishValues(array('music_sensitivity' => $sens));
+                    return;
+                }
+                break;
+        }
+        if (!$active) {
+            $this->saveBeforeMusic();
+        }
+        $this->send(self::ptReal(array(self::fPower(true), self::fMusic($mode, $sens))));
+        $this->publishValues(array(
+            'state' => 1, 'music' => 1, 'music_mode' => self::MUSIC_MODES[$mode],
+            'music_sensitivity' => $sens, 'scene' => '',
+        ));
+    }
+
+    private function musicModeCode() {
+        $label = (string) $this->info('music_mode', '');
+        foreach (self::MUSIC_MODES as $code => $name) {
+            if ($name === $label) {
+                return $code;
+            }
+        }
+        return self::MUSIC_DEFAULT;
+    }
+
+    /* Ce qui tournait avant la musique : un effet, sinon le dernier état relu
+     * sur la lampe (blanc ou couleur). */
+    private function saveBeforeMusic() {
+        $scene = (string) $this->info('scene', '');
+        if ($scene !== '') {
+            $this->setCache('before_music', 'scene:' . $scene);
+            return;
+        }
+        $status = $this->getCache('last_status', array());
+        $k = is_array($status) && isset($status['colorTemInKelvin']) ? (int) $status['colorTemInKelvin'] : 0;
+        if ($k > 0) {
+            $this->setCache('before_music', 'kelvin:' . $k);
+        } elseif (is_array($status) && isset($status['color']) && is_array($status['color'])) {
+            $this->setCache('before_music', 'color:' . self::rgbToHex(array(
+                (int) $status['color']['r'], (int) $status['color']['g'], (int) $status['color']['b'])));
+        } else {
+            $this->setCache('before_music', '');
+        }
+    }
+
+    private function restoreBeforeMusic() {
+        $before = (string) $this->getCache('before_music', '');
+        list($kind, $value) = array_pad(explode(':', $before, 2), 2, '');
+        try {
+            if ($kind === 'scene') {
+                $this->runAction('scene_set', array('select' => $value));
+                return;
+            }
+            if ($kind === 'color' && $value !== '#000000') {
+                $this->runAction('color_set', array('color' => $value));
+                return;
+            }
+        } catch (Throwable $e) {
+            log::add(__CLASS__, 'debug', $this->getHumanName() . ' : ' . $e->getMessage());
+        }
+        list($kMin) = $this->kelvinRange();
+        $this->runAction('colortemp_set', array('slider' => $kind === 'kelvin' ? (int) $value : max($kMin, 3000)));
     }
 
     /* Ordre d'allumage des zones, pour la limite de deux. */

@@ -87,6 +87,10 @@ a3 ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 5c
 33 05 04 d4 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 e6'));
 check('liste : doublon suffixé de sa catégorie', strpos(govee::sceneListValue(govee::sceneCatalogue('H60B0')), 'Meditation (') !== false, true);
 
+echo "Mode musique\n";
+check('Rythme, sensibilité 100 (vérifié sur la lampe)', bin2hex(govee::fMusic(114, 100)), '3305137264000000000000000000000000000033');
+check('sensibilité bornée', bin2hex(govee::fMusic(131, 150)), bin2hex(govee::fMusic(131, 100)));
+
 echo "Décodage d'état (réponses réelles du H60B0)\n";
 check('blanc 2700 K', govee::statusValues(json_decode('{"onOff":1,"brightness":100,"color":{"r":0,"g":0,"b":0},"colorTemInKelvin":2700}', true)),
     array('state' => 1, 'brightness' => 100, 'colortemp' => 2700, 'color' => govee::rgbToHex(govee::kelvinToRgb(2700))));

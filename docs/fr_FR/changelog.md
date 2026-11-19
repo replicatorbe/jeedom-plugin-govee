@@ -6,6 +6,9 @@
   sur le H60B0), envoyés en local. Catalogue livré pour le H60B0,
   téléchargé pour les autres modèles, mis à jour par un bouton.
 - Commande info « Effet » : dernier effet lancé.
+- Mode musique de l'Uplighter (micro de la lampe) : activer, désactiver
+  (retour à l'état d'avant), choix parmi huit modes, sensibilité (50 % par
+  défaut).
 
 ## 0.1.0 (beta)
 
