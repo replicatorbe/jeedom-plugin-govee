@@ -45,6 +45,8 @@
  *      VLAN là où les broadcasts de la synchro s'arrêtent : chaque état
  *      poussé par le WLED est appliqué aux lampes qui le suivent, et un
  *      changement d'une lampe qui annonce lui est renvoyé.
+ *      Avec la copie en direct, l'aperçu du WLED (ses LED, 20 images par
+ *      seconde) est rejoué sur la lampe par le flux temps réel de Govee.
  *   6. L'émulation WLED : pour chaque lampe où elle est activée, un serveur
  *      HTTP et WebSocket sur un port propre, qui parle comme un WLED à
  *      l'appli WLED. Les ordres reçus sont passés à Jeedom (sans bloquer la
@@ -206,7 +208,8 @@ function gvDevice($_ip, $_eq, $_name) {
     $now = gvClock();
     return array('eq' => (int) $_eq, 'name' => $_name, 'nextPoll' => $now + 0.5 + count($devices) * 0.3,
                  'lastSeen' => -INF, 'since' => $now, 'online' => null, 'last' => '', 'pushedAt' => -INF,
-                 'wled' => gvWledConfig(null), 'status' => null, 'sig' => '', 'wledAt' => -INF, 'announcedAt' => -INF, 'api' => null);
+                 'wled' => gvWledConfig(null), 'status' => null, 'sig' => '', 'wledAt' => -INF, 'announcedAt' => -INF, 'api' => null,
+                 'razer' => false, 'razerOnAt' => -INF, 'razerSentAt' => -INF, 'razerLast' => '', 'quietUntil' => -INF, 'restore' => false);
 }
 
 /* Liste des lampes, relue chez Jeedom au démarrage, chaque minute, et quand le
@@ -237,6 +240,9 @@ function gvLoadDevices() {
         if ($wled !== $fresh[$ip]['wled'] && ($wled['recv'] || $wled['send'])) {
             gvLog('info', 'Synchro WLED de ' . $name . ' : ' . ($wled['recv'] ? 'réception' : '') . ($wled['recv'] && $wled['send'] ? ' et ' : '')
                 . ($wled['send'] ? 'envoi' : '') . ', groupes ' . implode(',', gvWledGroupList($wled['groups'])));
+        }
+        if ($fresh[$ip]['razer'] && ($wled['mirror'] === '' || $wled['follow'] !== $fresh[$ip]['wled']['follow'])) {
+            gvRazerStop($fresh[$ip], $ip, true);
         }
         if ($wled['follow'] !== $fresh[$ip]['wled']['follow'] && $wled['follow'] !== '') {
             gvLog('info', $name . ' suit le WLED ' . $wled['follow'] . ' par WebSocket');
@@ -455,6 +461,10 @@ function gvWledConfig($_c) {
         'groups' => isset($c['groups']) ? max(1, min(255, (int) $c['groups'])) : 1,
         'k'      => $k,
         /* Adresse IPv4 d'un WLED à suivre par WebSocket, port facultatif. */
+        /* Copie en direct : '', 'average' (une couleur) ou 'spread' (une
+         * par segment, 'segs' au plus). */
+        'mirror' => (isset($c['mirror']) && in_array($c['mirror'], array('average', 'spread'), true)) ? $c['mirror'] : '',
+        'segs'   => isset($c['segs']) ? max(0, min(32, (int) $c['segs'])) : 0,
         'follow' => (isset($c['follow']) && preg_match('/^\d{1,3}(\.\d{1,3}){3}(:\d{1,5})?$/', (string) $c['follow'])) ? (string) $c['follow'] : '',
     );
 }
@@ -568,7 +578,7 @@ function gvWledApply() {
             unset($wledWant[$ip]);
             continue;
         }
-        if (!empty($queues[$ip])) {
+        if (!empty($queues[$ip]) || gvClock() < $devices[$ip]['quietUntil']) {
             continue;
         }
         unset($wledWant[$ip]);
@@ -662,7 +672,7 @@ function gvFollowSync() {
             $follows[$addr] = array('addr' => $addr, 'host' => $parts[0], 'port' => isset($parts[1]) ? (int) $parts[1] : 80,
                 'sock' => null, 'state' => 'idle', 'buf' => '', 'frag' => null, 'out' => '', 'accept' => '',
                 'fails' => 0, 'down' => false, 'next' => $now, 'last' => $now, 'pingAt' => $now, 'openedAt' => 0,
-                'deadline' => 0, 'ref' => null, 'seg' => 0);
+                'deadline' => 0, 'ref' => null, 'seg' => 0, 'on' => false, 'live' => false, 'liveAt' => -INF, 'liveAskedAt' => -INF);
         }
     }
     foreach (array_keys($follows) as $addr) {
@@ -692,7 +702,9 @@ function gvFollowClose(&$_c, $_why) {
     $_c['frag'] = null;
     $_c['out'] = '';
     $_c['ref'] = null;
+    $_c['live'] = false;
     $_c['next'] = $now + min(120, 5 * (1 << min(5, $_c['fails'] - 1)));
+    gvRazerStopFollowers($_c['addr'], true);
     if (!$_c['down']) {
         $_c['down'] = true;
         gvLog('warning', 'WLED ' . $_c['addr'] . ' : connexion perdue (' . $_why . '), nouvel essai en s\'espaçant');
@@ -844,6 +856,9 @@ function gvFollowReadable($_addr) {
                     gvFollowState($_addr, $data['state']);
                 }
                 break;
+            case 'binary':
+                gvFollowLive($_addr, $event[1]);
+                break;
         }
     }
 }
@@ -858,6 +873,11 @@ function gvFollowState($_addr, $_state) {
     }
     $c = &$follows[$_addr];
     $c['seg'] = isset($_state['mainseg']) ? (int) $_state['mainseg'] : 0;
+    $c['on'] = $packet['on'];
+    if (!$packet['on']) {
+        /* WLED éteint : la copie s'arrête, la lampe suit l'extinction. */
+        gvRazerStopFollowers($_addr, false);
+    }
     $ref = json_encode(array($packet['on'], $packet['bri'], $packet['rgb'], $packet['w'], $packet['fx'] === 0, $packet['kelvin'], $packet['cct']));
     $first = $c['ref'] === null;
     if ($ref === $c['ref']) {
@@ -874,11 +894,123 @@ function gvFollowState($_addr, $_state) {
          * état à tous ses clients) ne lui est pas réappliqué. */
         if ($d['wled']['follow'] === $_addr && $d['online'] !== false && gvClock() - $d['announcedAt'] > 2.5) {
             $want = wledWanted($packet, $d['wled']['k'][0], $d['wled']['k'][1]);
+            /* Pendant la copie, la couleur vient de l'aperçu : seuls
+             * l'allumage et la luminosité sont suivis. */
+            if ($want !== null && $d['wled']['mirror'] !== '') {
+                unset($want['color'], $want['kelvin']);
+            }
             if ($want !== null) {
                 $wledWant[$ip] = $want;
             }
         }
     }
+}
+
+/* ---------------------------------------------------- COPIE EN DIRECT */
+
+/* Une image d'aperçu du WLED : rejouée sur chaque lampe qui le copie. */
+function gvFollowLive($_addr, $_data) {
+    global $follows, $devices;
+    $c = &$follows[$_addr];
+    $c['liveAt'] = gvClock();
+    if (!$c['on']) {
+        return;
+    }
+    $now = gvClock();
+    foreach ($devices as $ip => &$d) {
+        if ($d['wled']['follow'] !== $_addr || $d['wled']['mirror'] === '' || $d['online'] === false || $now < $d['quietUntil']) {
+            continue;
+        }
+        $segments = ($d['wled']['mirror'] === 'spread' && $d['wled']['segs'] > 1) ? $d['wled']['segs'] : 1;
+        $colors = wledLiveColors($_data, $segments);
+        if ($colors === null) {
+            continue;
+        }
+        $frame = wledRazerFrame($colors);
+        /* 30 images par seconde au plus ; une image inchangée n'est
+         * renvoyée qu'une fois par seconde. */
+        if ($now - $d['razerSentAt'] < 1 / 30 || ($frame === $d['razerLast'] && $now - $d['razerSentAt'] < 1)) {
+            continue;
+        }
+        /* Le mode flux est (re)demandé à l'entrée, puis toutes les cinq
+         * secondes : un ordre venu d'ailleurs a pu en faire sortir la lampe. */
+        if (!$d['razer'] || $now - $d['razerOnAt'] > 5) {
+            gvSendTo(RAZER_ON, $ip . ':4003');
+            if (!$d['razer']) {
+                gvLog('info', $d['name'] . ' copie en direct le WLED ' . $_addr);
+            }
+            $d['razer'] = true;
+            $d['razerOnAt'] = $now;
+        }
+        gvSendTo($frame, $ip . ':4003');
+        $d['razerSentAt'] = $now;
+        $d['razerLast'] = $frame;
+    }
+    unset($d);
+}
+
+/* Sortie du flux : la lampe garde sa dernière image ; une seconde plus
+ * tard, son état lui est redonné ($_restore), ou l'ordre qui attend (une
+ * extinction) part. */
+function gvRazerStop(&$_d, $_ip, $_restore) {
+    if (!$_d['razer']) {
+        return;
+    }
+    gvSendTo(RAZER_OFF, $_ip . ':4003');
+    $_d['razer'] = false;
+    $_d['razerLast'] = '';
+    $_d['quietUntil'] = gvClock() + 1;
+    $_d['restore'] = $_restore;
+    gvLog('info', $_d['name'] . ' : fin de la copie en direct');
+}
+
+function gvRazerStopFollowers($_addr, $_restore) {
+    global $devices;
+    foreach ($devices as $ip => &$d) {
+        if ($d['wled']['follow'] === $_addr) {
+            gvRazerStop($d, $ip, $_restore);
+        }
+    }
+    unset($d);
+}
+
+/* Après la pause de sortie, l'état d'avant (dernier relevé) est renvoyé. */
+function gvRazerTick() {
+    global $devices, $follows, $confirm;
+    $now = gvClock();
+    foreach ($devices as $ip => &$d) {
+        if ($d['restore'] && $now >= $d['quietUntil']) {
+            $d['restore'] = false;
+            if (is_array($d['status'])) {
+                $msgs = wledMessages($d['status'], null);
+                foreach ($msgs as $m) {
+                    gvEnqueue($ip, $m);
+                }
+                $confirm[$ip] = $now + count($msgs) * GAP + CONFIRM_AFTER;
+            }
+        }
+    }
+    unset($d);
+    /* L'aperçu est demandé au WLED tant qu'une lampe le copie. WLED ne le
+     * donne qu'à un client : s'il se tait alors que le WLED est allumé (vue
+     * « Peek » ouverte ailleurs), il est redemandé toutes les 30 s. */
+    foreach ($follows as $addr => &$c) {
+        if ($c['state'] !== 'open') {
+            continue;
+        }
+        $wanted = false;
+        foreach ($devices as $d) {
+            $wanted = $wanted || ($d['wled']['follow'] === $addr && $d['wled']['mirror'] !== '');
+        }
+        $silent = $c['live'] && $c['on'] && $now - $c['liveAt'] > 5 && $now - $c['liveAskedAt'] > 30;
+        if ($wanted !== $c['live'] || ($wanted && $silent)) {
+            gvFollowSend($c, wsFrame(1, $wanted ? '{"lv":true}' : '{"lv":false}', true));
+            $c['live'] = $wanted;
+            $c['liveAskedAt'] = $now;
+            $c['liveAt'] = $now;
+        }
+    }
+    unset($c);
 }
 
 /* Une lampe qui annonce renvoie ses changements au WLED qu'elle suit. */
@@ -1621,6 +1753,7 @@ while ($running) {
     }
 
     gvPolls();
+    gvRazerTick();
     gvWledApply();
     gvFlushQueues();
 
@@ -1706,6 +1839,26 @@ while ($running) {
     gvPush();
 }
 
+/* Lampes en copie : sorties du flux et rendues à leur état. */
+$released = false;
+foreach ($devices as $ip => &$d) {
+    if ($d['razer']) {
+        gvSendTo(RAZER_OFF, $ip . ':4003');
+        $released = true;
+    }
+}
+unset($d);
+if ($released) {
+    sleep(1);
+    foreach ($devices as $ip => $d) {
+        if ($d['razer'] && is_array($d['status'])) {
+            foreach (wledMessages($d['status'], null) as $m) {
+                gvSendTo($m, $ip . ':4003');
+                usleep(200000);
+            }
+        }
+    }
+}
 foreach ($clients as $c) {
     @fclose($c['sock']);
 }

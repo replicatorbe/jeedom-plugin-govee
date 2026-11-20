@@ -189,6 +189,19 @@ $eqLogics = eqLogic::byType($plugin->getId());
 								</div>
 							</div>
 							<div class="form-group">
+								<label class="col-sm-3 control-label">{{Copier les couleurs en direct}}</label>
+								<div class="col-sm-5">
+									<select class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="wled_mirror">
+										<option value="">{{Non}}</option>
+										<option value="average">{{Couleur moyenne du WLED}}</option>
+										<option value="spread">{{Répartie sur la lampe (bas → haut)}}</option>
+									</select>
+								</div>
+								<div class="col-sm-4">
+									<span class="help-block" style="margin:0;">{{La lampe rejoue en temps réel les couleurs des LED du WLED suivi (tous ses effets, 20 images par seconde). « Répartie » découpe la bande sur les segments de la lampe (H60B0 : 7, du bas vers le haut) ; les autres modèles prennent la couleur moyenne. Le WLED ne donne son aperçu qu'à un seul client : ouvrir sa vue « Peek » dans un navigateur interrompt la copie.}}</span>
+								</div>
+							</div>
+							<div class="form-group">
 								<label class="col-sm-3 control-label">{{Recevoir la synchro UDP}}</label>
 								<div class="col-sm-5">
 									<input type="checkbox" class="eqLogicAttr" data-l1key="configuration" data-l2key="wled_recv">

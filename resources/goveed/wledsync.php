@@ -301,3 +301,70 @@ function wledFromJson($_state) {
     }
     return $packet;
 }
+
+/*
+ * Copie en direct : l'aperçu d'un WLED ({"lv":true} sur son WebSocket),
+ * rejoué sur la lampe par le flux temps réel de Govee (« razer », celui de
+ * Govee Desktop et de LedFx).
+ *
+ * Image d'aperçu WLED (wled00/ws.cpp, sendLiveLedsWs) : « L », version (1
+ * bande, 2 matrice suivie de largeur et hauteur), puis un triplet RVB par
+ * LED, sans la luminosité générale (sauf 0 : tout noir). Au plus 25 images
+ * par seconde ; un ESP8266 n'envoie qu'une LED sur n au-delà de 256.
+ *
+ * Trame razer : BB 00 FA B0, puis 1 (une couleur étirée sur toute la lampe)
+ * ou 0 (une couleur par segment), le nombre de couleurs, les couleurs, et le
+ * XOR de tout ce qui précède, en base64 dans {"cmd":"razer","data":{"pt"}}.
+ * Une trame qui annonce plus de segments que la lampe n'en accepte est
+ * rejetée : la lampe s'éteint jusqu'à la trame valide suivante (7 au plus
+ * sur le H60B0, relevé sur la lampe, du bas vers le haut).
+ * À la sortie du flux, la lampe garde sa dernière image : il faut lui
+ * redonner son état, une seconde plus tard.
+ */
+const RAZER_ON = '{"msg":{"cmd":"razer","data":{"pt":"uwABsQEK"}}}';
+const RAZER_OFF = '{"msg":{"cmd":"razer","data":{"pt":"uwABsQAL"}}}';
+
+/* Couleurs d'une image d'aperçu, ramenées à $_segments moyennes (la bande
+ * coupée en parts égales, dans l'ordre). Rend null si l'image est illisible. */
+function wledLiveColors($_data, $_segments) {
+    if (!is_string($_data) || strlen($_data) < 5 || $_data[0] !== 'L') {
+        return null;
+    }
+    $offset = ord($_data[1]) === 2 ? 4 : 2;
+    $count = intdiv(strlen($_data) - $offset, 3);
+    if ($count < 1) {
+        return null;
+    }
+    $px = array_values(unpack('C*', substr($_data, $offset, $count * 3)));
+    $segments = max(1, min((int) $_segments, $count));
+    $colors = array();
+    for ($s = 0; $s < $segments; $s++) {
+        $from = intdiv($s * $count, $segments);
+        $to = max($from + 1, intdiv(($s + 1) * $count, $segments));
+        $sum = array(0, 0, 0);
+        for ($i = $from; $i < $to; $i++) {
+            $sum[0] += $px[3 * $i];
+            $sum[1] += $px[3 * $i + 1];
+            $sum[2] += $px[3 * $i + 2];
+        }
+        $n = $to - $from;
+        $colors[] = array((int) round($sum[0] / $n), (int) round($sum[1] / $n), (int) round($sum[2] / $n));
+    }
+    return $colors;
+}
+
+/* Trame razer : une couleur étirée sur toute la lampe, ou une par segment. */
+function wledRazerFrame($_colors) {
+    $bytes = array(0xBB, 0x00, 0xFA, 0xB0, count($_colors) === 1 ? 1 : 0, count($_colors));
+    foreach ($_colors as $c) {
+        $bytes[] = max(0, min(255, (int) $c[0]));
+        $bytes[] = max(0, min(255, (int) $c[1]));
+        $bytes[] = max(0, min(255, (int) $c[2]));
+    }
+    $x = 0;
+    foreach ($bytes as $b) {
+        $x ^= $b;
+    }
+    $bytes[] = $x;
+    return '{"msg":{"cmd":"razer","data":{"pt":"' . base64_encode(pack('C*', ...$bytes)) . '"}}}';
+}

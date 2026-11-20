@@ -12,7 +12,8 @@ LAN de Govee : sans cloud, sans compte, sans clé API.
 - **Mode musique** de l'Uplighter : la lampe suit le son de son micro.
 - **WLED** : la lampe suit un WLED (WebSocket, même sur un autre VLAN) ou
   un groupe de synchro WLED, leur annonce ses changements, et se présente
-  elle-même comme un WLED pour l'appli WLED.
+  elle-même comme un WLED pour l'appli WLED. Elle peut aussi copier en
+  direct les couleurs d'un WLED (tous ses effets, en temps réel).
 
 Documentation : [docs/fr_FR/index.md](docs/fr_FR/index.md).
 

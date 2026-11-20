@@ -55,6 +55,11 @@ class govee extends eqLogic {
     const WLED_API_PORT = 8180;
     /* Ports qu'une lampe émulée ne peut pas prendre. */
     const WLED_API_RESERVED = array(80, 443, 4001, 4002, 4003, 21324);
+    /* Segments acceptés par le flux temps réel (« razer ») : au-delà, la
+     * lampe rejette la trame et s'éteint. Relevé sur la lampe (H60B0 : 7,
+     * du bas vers le haut ; 8 rejetés). Un modèle absent ne copie qu'en
+     * couleur moyenne. */
+    const RAZER_SEGMENTS = array('H60B0' => 7);
     /* Zones d'un Uplighter, dans l'ordre des segments WLED. */
     const WLED_ZONE_ORDER = array('top', 'side', 'bottom');
     /* LED fictives par segment : l'appli n'en affiche que le nombre. */
@@ -330,6 +335,12 @@ class govee extends eqLogic {
         return $list;
     }
 
+    /* Segments du flux temps réel pour ce modèle, 0 si inconnu. */
+    public function razerSegments() {
+        $sku = strtoupper((string) $this->getConfiguration('sku', ''));
+        return isset(self::RAZER_SEGMENTS[$sku]) ? self::RAZER_SEGMENTS[$sku] : 0;
+    }
+
     /* Réglages de synchro WLED d'une lampe, pour le démon. */
     public function wledConfig() {
         return array(
@@ -338,6 +349,8 @@ class govee extends eqLogic {
             'groups' => wledGroupMask($this->getConfiguration('wled_groups', '1')),
             'k'      => $this->kelvinRange(),
             'follow' => self::wledAddress($this->getConfiguration('wled_follow', '')),
+            'mirror' => in_array($this->getConfiguration('wled_mirror', ''), array('average', 'spread'), true) ? $this->getConfiguration('wled_mirror') : '',
+            'segs'   => $this->razerSegments(),
         );
     }
 
@@ -576,6 +589,9 @@ class govee extends eqLogic {
         $this->setConfiguration('wled_follow', $follow);
         if ($follow !== '' && self::wledAddress($follow) === '') {
             throw new Exception(sprintf(__('Adresse du WLED à suivre illisible : %s. Donnez son adresse IP (192.168.1.50), éventuellement suivie du port (192.168.1.50:80).', __FILE__), $follow));
+        }
+        if ($follow === '' && in_array($this->getConfiguration('wled_mirror', ''), array('average', 'spread'), true)) {
+            throw new Exception(__('La copie en direct demande l\'adresse du WLED à suivre.', __FILE__));
         }
         $groups = trim((string) $this->getConfiguration('wled_groups', ''));
         if ($groups !== '' && !preg_match('/^\s*[1-8](\s*[,; ]\s*[1-8])*\s*$/', $groups)) {

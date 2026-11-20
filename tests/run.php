@@ -235,6 +235,20 @@ $state = $up->wledState();
 check('état : trois segments, seul le 0 sélectionné', array(count($state['seg']), array_column($state['seg'], 'sel')), array(3, array(true, false, false)));
 check('état : CCT relatif 0-255', $state['seg'][0]['cct'], (int) round((4000 - 2700) * 255 / (6500 - 2700)));
 
+echo "Copie en direct (flux razer)\n";
+check('activation (LedFx)', base64_decode(json_decode(RAZER_ON, true)['msg']['data']['pt']), pack('C*', 0xBB, 0, 1, 0xB1, 1, 0x0A));
+/* Trame vérifiée sur la lampe : rouge sur toute la lampe. */
+check('trame une couleur', wledRazerFrame(array(array(255, 0, 0))), '{"msg":{"cmd":"razer","data":{"pt":"uwD6sAEB/wAADg=="}}}');
+$frame = base64_decode(json_decode(wledRazerFrame(array_fill(0, 7, array(1, 2, 3))), true)['msg']['data']['pt']);
+check('7 segments : par segment, somme XOR nulle', array(ord($frame[4]), ord($frame[5]), array_reduce(str_split($frame), function ($x, $c) { return $x ^ ord($c); }, 0)), array(0, 7, 0));
+/* Aperçu de 6 LED : 3 rouges puis 3 bleues. */
+$live = 'L' . chr(1) . str_repeat(chr(255) . chr(0) . chr(0), 3) . str_repeat(chr(0) . chr(0) . chr(255), 3);
+check('aperçu, moyenne', wledLiveColors($live, 1), array(array(128, 0, 128)));
+check('aperçu, 2 segments', wledLiveColors($live, 2), array(array(255, 0, 0), array(0, 0, 255)));
+check('aperçu, plus de segments que de LED', count(wledLiveColors($live, 7)), 6);
+check('aperçu matrice (version 2)', wledLiveColors('L' . chr(2) . chr(1) . chr(1) . chr(9) . chr(8) . chr(7), 1), array(array(9, 8, 7)));
+check('aperçu illisible', wledLiveColors('{"state":1}', 3), null);
+
 echo "Couleurs\n";
 check('#abc', govee::hexToRgb('#abc'), array(170, 187, 204));
 check('aller-retour', govee::rgbToHex(govee::hexToRgb('#12aBef')), '#12abef');

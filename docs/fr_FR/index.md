@@ -139,6 +139,25 @@ Jeedom.
 - Un ESP8266 n'accepte que trois clients WebSocket : le plugin WLED en
   prend un, la lampe un autre.
 
+### Copier les couleurs en direct
+
+Avec **Copier les couleurs en direct**, la lampe rejoue en temps réel les
+couleurs des LED du WLED suivi : tous ses effets (feu, arc-en-ciel, vagues…),
+et demain ses effets réactifs au son, à 20 images par seconde environ. Le
+démon reçoit l'aperçu du WLED (celui de sa vue « Peek ») et le transmet à la
+lampe par le flux temps réel de Govee, celui de Govee Desktop.
+
+- **Couleur moyenne** : toute la lampe prend la couleur moyenne du WLED.
+- **Répartie sur la lampe** : la bande du WLED est découpée sur les
+  segments du flux, du bas vers le haut (H60B0 : 7 segments, relevés sur la
+  lampe). Les autres modèles prennent la couleur moyenne.
+- La luminosité reste celle du WLED, suivie comme d'habitude ; WLED éteint,
+  la lampe s'éteint et sort du flux. À l'arrêt de la copie (case décochée,
+  WLED injoignable, démon arrêté), la lampe retrouve son état d'avant.
+- Le WLED ne donne son aperçu qu'à un client à la fois : ouvrir sa vue
+  « Peek » dans un navigateur interrompt la copie, reprise au plus tard
+  30 secondes après sa fermeture.
+
 ## Synchro WLED
 
 La lampe peut entrer dans un groupe de synchro WLED, comme un WLED de plus :

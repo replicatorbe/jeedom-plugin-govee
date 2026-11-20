@@ -58,8 +58,9 @@ function wsFrame($_opcode, $_payload, $_mask) {
 /*
  * Découpe ce qui est arrivé. $_buf est consommé ; $_frag garde un message
  * texte en cours de réassemblage (array('op' => …, 'data' => …)).
- * Rend une liste d'événements : array('text', message), array('ping',
- * contenu), array('close', ''), ou array('error', raison).
+ * Rend une liste d'événements : array('text', message), array('binary',
+ * données), array('ping', contenu), array('close', ''), ou array('error',
+ * raison).
  */
 function wsParse(&$_buf, &$_frag) {
     $events = array();
@@ -129,6 +130,8 @@ function wsParse(&$_buf, &$_frag) {
         if ($fin) {
             if ($_frag['op'] === 1) {
                 $events[] = array('text', $_frag['data']);
+            } else {
+                $events[] = array('binary', $_frag['data']);
             }
             $_frag = array('op' => 1, 'data' => '');
         }

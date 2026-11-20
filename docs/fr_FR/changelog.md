@@ -1,5 +1,12 @@
 # Changelog — plugin Govee LAN
 
+## 0.4.0 (beta)
+
+- Copier les couleurs en direct : la lampe rejoue en temps réel les LED du
+  WLED suivi (aperçu WLED → flux temps réel Govee, 20 images par seconde),
+  en couleur moyenne ou répartie sur ses segments (H60B0 : 7, du bas vers
+  le haut). Sortie du flux propre : la lampe retrouve son état d'avant.
+
 ## 0.3.0 (beta)
 
 - Synchro WLED : la lampe rejoint un groupe de synchro WLED (UDP 21324).
