@@ -139,6 +139,18 @@ Jeedom.
 - Un ESP8266 n'accepte que trois clients WebSocket : le plugin WLED en
   prend un, la lampe un autre.
 
+### Commandes WLED
+
+Pour les scénarios, chaque lampe a :
+
+| Commande | Rôle |
+|---|---|
+| Suivre le WLED / Ne plus suivre le WLED | Reprendre ou suspendre le suivi, sans perdre l'adresse saisie |
+| Suivi WLED actif | 1 si la lampe suit son WLED |
+| WLED suivi joignable | 1 tant que la connexion au WLED est ouverte : de quoi alerter s'il disparaît |
+| Régler la copie en direct | Non, Couleur moyenne ou Répartie |
+| Copie en direct | Le choix en cours |
+
 ### Copier les couleurs en direct
 
 Avec **Copier les couleurs en direct**, la lampe rejoue en temps réel les
@@ -224,6 +236,31 @@ site ne peut pas s'en servir (contrôle de l'origine), les connexions sont
 limitées (32, dont 12 par lampe) et les trames brutes ne sont pas
 accessibles. Home Assistant n'est pas
 pris en charge : il impose le port 80, celui de Jeedom.
+
+## Exemple : soirée musique
+
+Un scénario « Soirée » lancé à la main, par un bouton ou à heure fixe :
+
+1. Plugin WLED : allumer le WLED du salon sur un effet animé (par exemple
+   « Fire 2012 » ou un effet réactif au son si un WLED capte la musique).
+2. Lampe Govee : **Régler la copie en direct** sur **Répartie**. La lampe
+   rejoue les couleurs du WLED, segment par segment.
+3. Pour danser sur la musique avec son propre micro, la lampe peut aussi
+   passer en **Activer le mode musique** à la place de la copie.
+
+Et un scénario « Fin de soirée » : **Régler la copie en direct** sur **Non**
+(la lampe retrouve son état d'avant), puis éteindre le WLED. Avec le suivi
+actif, éteindre le WLED éteint aussi la lampe.
+
+La commande **WLED suivi joignable** peut déclencher une alerte si le WLED
+disparaît du réseau.
+
+## Santé
+
+La page Santé du plugin montre l'état du démon et des lampes et, quand elles
+sont utilisées, celui des fonctions WLED : connexion à chaque WLED suivi
+(copie en cours ou prête), port de l'appli WLED et nombre d'applis
+connectées, port de la synchro UDP.
 
 ## Démon
 

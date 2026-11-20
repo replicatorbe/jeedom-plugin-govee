@@ -60,6 +60,8 @@ class govee extends eqLogic {
      * du bas vers le haut ; 8 rejetés). Un modèle absent ne copie qu'en
      * couleur moyenne. */
     const RAZER_SEGMENTS = array('H60B0' => 7);
+    /* Choix de la copie en direct : valeur de configuration => libellé. */
+    const MIRROR_MODES = array('off' => 'Non', 'average' => 'Couleur moyenne', 'spread' => 'Répartie');
     /* Zones d'un Uplighter, dans l'ordre des segments WLED. */
     const WLED_ZONE_ORDER = array('top', 'side', 'bottom');
     /* LED fictives par segment : l'appli n'en affiche que le nombre. */
@@ -171,7 +173,72 @@ class govee extends eqLogic {
             'advice' => count($offline) === 0 ? '' : __('Vérifiez l\'adresse IP et que « LAN Control » est activé dans l\'application Govee.', __FILE__),
             'state'  => count($offline) === 0,
         );
+        if ($daemon) {
+            $return = array_merge($return, self::healthWled());
+        }
         return $return;
+    }
+
+    /* Santé des fonctions WLED, d'après le démon : suivi, copie en direct,
+     * appli WLED. Une ligne par fonction utilisée. */
+    private static function healthWled() {
+        $status = self::daemonRequest(array('action' => 'status'));
+        if (!is_array($status) || empty($status['ok']) || !isset($status['devices'])) {
+            return array();
+        }
+        $names = array();
+        foreach (self::byType(__CLASS__, true) as $eqLogic) {
+            $names[(int) $eqLogic->getId()] = $eqLogic->getHumanName();
+        }
+        $follow = array('ok' => array(), 'ko' => array());
+        $api = array('ok' => array(), 'ko' => array());
+        $sync = false;
+        foreach ($status['devices'] as $d) {
+            $name = isset($names[(int) $d['eq']]) ? $names[(int) $d['eq']] : $d['ip'];
+            if ($d['follow'] !== '') {
+                $text = $name . ' → ' . $d['follow'] . ($d['razer'] ? ' (' . __('copie en cours', __FILE__) . ')' : ($d['mirror'] !== '' ? ' (' . __('copie prête', __FILE__) . ')' : ''));
+                $follow[$d['link'] === 'open' ? 'ok' : 'ko'][] = $text;
+            }
+            if (is_array($d['api'])) {
+                $text = $name . ' : ' . __('port', __FILE__) . ' ' . (int) $d['api']['port'];
+                if ($d['api']['listening']) {
+                    $api['ok'][] = $text . ', ' . sprintf(__('%d appli(s) connectée(s)', __FILE__), (int) $d['api']['clients']);
+                } else {
+                    $api['ko'][] = $text . ' ' . __('pris par un autre logiciel', __FILE__);
+                }
+            }
+            $sync = $sync || !empty($d['sync']);
+        }
+        $rows = array();
+        $list = function ($_items) {
+            return htmlspecialchars(implode(' ; ', $_items), ENT_QUOTES);
+        };
+        if (!empty($follow['ok']) || !empty($follow['ko'])) {
+            $rows[] = array(
+                'test'   => __('Suivi WLED', __FILE__),
+                'result' => empty($follow['ko']) ? $list($follow['ok']) : __('Injoignable :', __FILE__) . ' ' . $list($follow['ko']),
+                'advice' => empty($follow['ko']) ? '' : __('WLED allumé et sur le réseau ? Un ESP8266 n\'accepte que trois clients WebSocket (plugin WLED, appli, navigateur…).', __FILE__),
+                'state'  => empty($follow['ko']),
+            );
+        }
+        if (!empty($api['ok']) || !empty($api['ko'])) {
+            $rows[] = array(
+                'test'   => __('Appli WLED', __FILE__),
+                'result' => $list(array_merge($api['ko'], $api['ok'])),
+                'advice' => empty($api['ko']) ? '' : __('Choisissez un autre port sur l\'équipement.', __FILE__),
+                'state'  => empty($api['ko']),
+            );
+        }
+        if ($sync) {
+            $rows[] = array(
+                'test'   => __('Synchro UDP WLED', __FILE__),
+                'result' => !empty($status['syncOpen']) ? sprintf(__('Port %d ouvert', __FILE__), (int) $status['syncPort'])
+                                                        : sprintf(__('Port %d pris par un autre logiciel', __FILE__), (int) $status['syncPort']),
+                'advice' => !empty($status['syncOpen']) ? '' : __('Changez le port de synchro dans la configuration du plugin.', __FILE__),
+                'state'  => !empty($status['syncOpen']),
+            );
+        }
+        return $rows;
     }
 
     /* =============================================================== DÉMON */
@@ -335,6 +402,30 @@ class govee extends eqLogic {
         return $list;
     }
 
+    /* Suivi d'un WLED : une adresse, et pas mis en pause par la commande
+     * « Ne plus suivre le WLED » (l'adresse est gardée pour la reprise). */
+    public function wledFollowActive() {
+        return self::wledAddress($this->getConfiguration('wled_follow', '')) !== ''
+            && (int) $this->getConfiguration('wled_follow_paused', 0) !== 1;
+    }
+
+    public function wledMirrorMode() {
+        $mode = (string) $this->getConfiguration('wled_mirror', '');
+        return isset(self::MIRROR_MODES[$mode]) && $mode !== 'off' ? $mode : 'off';
+    }
+
+    /* Valeurs des commandes info du WLED, d'après la configuration. */
+    private function publishWledConfig() {
+        $values = array(
+            'wled_follow' => $this->wledFollowActive() ? 1 : 0,
+            'wled_mirror' => __(self::MIRROR_MODES[$this->wledMirrorMode()], __FILE__),
+        );
+        if (!$this->wledFollowActive()) {
+            $values['wled_link'] = 0;
+        }
+        $this->publishValues($values);
+    }
+
     /* Segments du flux temps réel pour ce modèle, 0 si inconnu. */
     public function razerSegments() {
         $sku = strtoupper((string) $this->getConfiguration('sku', ''));
@@ -348,7 +439,7 @@ class govee extends eqLogic {
             'send'   => (int) $this->getConfiguration('wled_send', 0) === 1,
             'groups' => wledGroupMask($this->getConfiguration('wled_groups', '1')),
             'k'      => $this->kelvinRange(),
-            'follow' => self::wledAddress($this->getConfiguration('wled_follow', '')),
+            'follow' => $this->wledFollowActive() ? self::wledAddress($this->getConfiguration('wled_follow', '')) : '',
             'mirror' => in_array($this->getConfiguration('wled_mirror', ''), array('average', 'spread'), true) ? $this->getConfiguration('wled_mirror') : '',
             'segs'   => $this->razerSegments(),
         );
@@ -615,6 +706,9 @@ class govee extends eqLogic {
 
     public function postSave() {
         $this->createCommands();
+        if ($this->getId() != '') {
+            $this->publishWledConfig();
+        }
         self::notifyDaemon();
     }
 
@@ -678,6 +772,23 @@ class govee extends eqLogic {
                 $set->setConfiguration('listValue', $list);
                 $set->save();
             }
+        }
+
+        /* WLED : suivi (mis en pause ou repris sans perdre l'adresse), lien,
+         * et copie en direct, pilotables par scénario. */
+        $follow = $this->addCmdIfMissing('wled_follow', 'Suivi WLED actif', 'info', 'binary', array('order' => 200));
+        $this->addCmdIfMissing('wled_follow_on', 'Suivre le WLED', 'action', 'other', array('order' => 201, 'value' => $follow));
+        $this->addCmdIfMissing('wled_follow_off', 'Ne plus suivre le WLED', 'action', 'other', array('order' => 202, 'value' => $follow));
+        $this->addCmdIfMissing('wled_link', 'WLED suivi joignable', 'info', 'binary', array('order' => 203));
+        $mirror = $this->addCmdIfMissing('wled_mirror', 'Copie en direct', 'info', 'string', array('order' => 204));
+        $set = $this->addCmdIfMissing('wled_mirror_set', 'Régler la copie en direct', 'action', 'select', array('order' => 205, 'value' => $mirror));
+        $list = array();
+        foreach (self::MIRROR_MODES as $code => $label) {
+            $list[] = $code . '|' . __($label, __FILE__);
+        }
+        if ((string) $set->getConfiguration('listValue', '') !== implode(';', $list)) {
+            $set->setConfiguration('listValue', implode(';', $list));
+            $set->save();
         }
 
         if ($this->isUplighter()) {
@@ -813,6 +924,14 @@ class govee extends eqLogic {
     /* État renvoyé par la lampe (devStatus), poussé par le démon ou relevé
      * par le cron. */
     public function ingest($_state) {
+        /* Lien avec le WLED suivi, poussé par le démon avec les relevés. */
+        if (array_key_exists('wled_link', $_state)) {
+            $this->publishValues(array('wled_link' => (int) $_state['wled_link'] ? 1 : 0));
+            unset($_state['wled_link']);
+            if (empty($_state)) {
+                return;
+            }
+        }
         if (isset($_state['online']) && (int) $_state['online'] === 0) {
             $this->publishValues(array('online' => 0));
             return;
@@ -1504,6 +1623,36 @@ class govee extends eqLogic {
         }
         if (preg_match('/^zone_(top|side|bottom)_(on|off|brightness_set|colortemp_set|color_set)$/', $_logicalId, $m)) {
             $this->zoneAction($m[1], $m[2], $_options);
+            return;
+        }
+        if ($_logicalId === 'wled_follow_on' || $_logicalId === 'wled_follow_off') {
+            if (self::wledAddress($this->getConfiguration('wled_follow', '')) === '') {
+                throw new Exception(__('Aucun WLED à suivre : donnez son adresse sur la page de l\'équipement.', __FILE__));
+            }
+            $this->setConfiguration('wled_follow_paused', $_logicalId === 'wled_follow_off' ? 1 : 0);
+            $this->save(true);
+            $this->publishWledConfig();
+            self::notifyDaemon();
+            return;
+        }
+        if ($_logicalId === 'wled_mirror_set') {
+            $value = trim((string) (isset($_options['select']) ? $_options['select'] : ''));
+            $mode = null;
+            foreach (self::MIRROR_MODES as $code => $label) {
+                if (strcasecmp($code, $value) === 0 || strcasecmp($label, $value) === 0 || strcasecmp(__($label, __FILE__), $value) === 0) {
+                    $mode = $code;
+                }
+            }
+            if ($mode === null) {
+                throw new Exception(__('Copie en direct inconnue :', __FILE__) . ' ' . $value);
+            }
+            if ($mode !== 'off' && self::wledAddress($this->getConfiguration('wled_follow', '')) === '') {
+                throw new Exception(__('La copie en direct demande l\'adresse du WLED à suivre.', __FILE__));
+            }
+            $this->setConfiguration('wled_mirror', $mode === 'off' ? '' : $mode);
+            $this->save(true);
+            $this->publishWledConfig();
+            self::notifyDaemon();
             return;
         }
         if ($_logicalId === 'scene_set') {

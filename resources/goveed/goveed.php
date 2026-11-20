@@ -209,7 +209,7 @@ function gvDevice($_ip, $_eq, $_name) {
     return array('eq' => (int) $_eq, 'name' => $_name, 'nextPoll' => $now + 0.5 + count($devices) * 0.3,
                  'lastSeen' => -INF, 'since' => $now, 'online' => null, 'last' => '', 'pushedAt' => -INF,
                  'wled' => gvWledConfig(null), 'status' => null, 'sig' => '', 'wledAt' => -INF, 'announcedAt' => -INF, 'api' => null,
-                 'razer' => false, 'razerOnAt' => -INF, 'razerSentAt' => -INF, 'razerLast' => '', 'quietUntil' => -INF, 'restore' => false);
+                 'razer' => false, 'razerOnAt' => -INF, 'razerSentAt' => -INF, 'razerLast' => '', 'quietUntil' => -INF, 'restore' => false, 'link' => null);
 }
 
 /* Liste des lampes, relue chez Jeedom au démarrage, chaque minute, et quand le
@@ -356,7 +356,7 @@ function gvReadUdp() {
             if ($json !== $d['last'] || gvClock() - $d['pushedAt'] > 300) {
                 $d['last'] = $json;
                 $d['pushedAt'] = gvClock();
-                $states[$d['eq']] = $state;
+                $states[$d['eq']] = array_merge(isset($states[$d['eq']]) ? $states[$d['eq']] : array(), $state);
             }
             unset($d);
         }
@@ -388,7 +388,7 @@ function gvPolls() {
             $d['last'] = '';
             $d['status'] = null;
             $d['sig'] = '';
-            $states[$d['eq']] = array('online' => 0);
+            $states[$d['eq']] = array_merge(isset($states[$d['eq']]) ? $states[$d['eq']] : array(), array('online' => 0));
             gvLog('warning', $d['name'] . ' (' . $ip . ') ne répond plus');
         }
     }
@@ -969,6 +969,21 @@ function gvRazerStopFollowers($_addr, $_restore) {
     foreach ($devices as $ip => &$d) {
         if ($d['wled']['follow'] === $_addr) {
             gvRazerStop($d, $ip, $_restore);
+        }
+    }
+    unset($d);
+}
+
+/* Lien de chaque lampe avec le WLED qu'elle suit (connexion ouverte ou
+ * non), poussé à Jeedom quand il change (commande « WLED suivi joignable »). */
+function gvFollowLinks() {
+    global $devices, $follows, $states;
+    foreach ($devices as $ip => &$d) {
+        $addr = $d['wled']['follow'];
+        $link = ($addr !== '' && isset($follows[$addr]) && $follows[$addr]['state'] === 'open') ? 1 : 0;
+        if ($d['link'] !== $link) {
+            $d['link'] = $link;
+            $states[$d['eq']] = array_merge(isset($states[$d['eq']]) ? $states[$d['eq']] : array(), array('wled_link' => $link));
         }
     }
     unset($d);
@@ -1655,6 +1670,28 @@ function gvHandle($_client, $_line) {
             $confirm[$ip] = gvClock() + (isset($queues[$ip]) ? count($queues[$ip]) : 0) * GAP + CONFIRM_AFTER;
             gvReply($_client, array('ok' => true, 'queued' => count($req['msgs'])));
             return;
+        case 'status':
+            /* Pour la page Santé : suivi WLED, copie, émulation, par lampe. */
+            global $follows, $apis, $wledSock, $wledPort;
+            $list = array();
+            foreach ($devices as $ip => $d) {
+                $addr = $d['wled']['follow'];
+                $f = ($addr !== '' && isset($follows[$addr])) ? $follows[$addr] : null;
+                $list[] = array(
+                    'eq'      => $d['eq'],
+                    'ip'      => $ip,
+                    'online'  => $d['online'],
+                    'follow'  => $addr,
+                    'link'    => $f === null ? null : $f['state'],
+                    'mirror'  => $d['wled']['mirror'],
+                    'razer'   => $d['razer'],
+                    'api'     => $d['api'] === null ? null : array('port' => $d['api']['port'], 'listening' => isset($apis[$ip]),
+                                                              'clients' => isset($apis[$ip]) ? count($apis[$ip]['clients']) : 0),
+                    'sync'    => $d['wled']['recv'] || $d['wled']['send'],
+                );
+            }
+            gvReply($_client, array('ok' => true, 'devices' => $list, 'syncPort' => $wledPort, 'syncOpen' => $wledSock !== null));
+            return;
         case 'poll':
             $ip = isset($req['ip']) ? (string) $req['ip'] : '';
             if (isset($devices[$ip])) {
@@ -1753,6 +1790,7 @@ while ($running) {
     }
 
     gvPolls();
+    gvFollowLinks();
     gvRazerTick();
     gvWledApply();
     gvFlushQueues();

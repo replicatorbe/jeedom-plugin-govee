@@ -154,7 +154,44 @@ function goveeScenes() {
 
 /* ===================================================== APPELÉES PAR LE COEUR */
 
+/* Champs WLED affichés selon ce qui est coché ou saisi, et adresse à donner
+   à l'appli WLED. */
+function goveeConfField(_key) {
+  return document.querySelector('.eqLogicAttr[data-l1key="configuration"][data-l2key="' + _key + '"]')
+}
+function goveeWledFields() {
+  var api = goveeConfField('wled_api')
+  var port = goveeConfField('wled_api_port')
+  var follow = goveeConfField('wled_follow')
+  var apiOn = api !== null && api.checked
+  document.querySelectorAll('.goveeApiOnly').forEach(function (_row) { _row.style.display = apiOn ? '' : 'none' })
+  var mirror = goveeEl('div_goveeMirror')
+  if (mirror !== null) { mirror.style.display = (follow !== null && follow.value.trim() !== '') ? '' : 'none' }
+  var code = goveeEl('code_goveeApiAddress')
+  if (code !== null) {
+    code.textContent = code.getAttribute('data-ip') + ':' + ((port !== null && port.value.trim() !== '') ? port.value.trim() : '8180')
+  }
+}
+function goveeCopyAddress() {
+  var code = goveeEl('code_goveeApiAddress')
+  if (code === null) { return }
+  var text = code.textContent
+  var done = function () { jeedomUtils.showAlert({ message: '{{Adresse copiée :}} ' + goveeEscape(text), level: 'success' }) }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done)
+    return
+  }
+  /* Jeedom en http : l'API du presse-papiers est refusée hors https. */
+  var area = document.createElement('textarea')
+  area.value = text
+  document.body.appendChild(area)
+  area.select()
+  try { document.execCommand('copy'); done() } catch (e) {}
+  document.body.removeChild(area)
+}
+
 function printEqLogic(_eqLogic) {
+  setTimeout(goveeWledFields, 0)
   var conf = isset(_eqLogic.configuration) ? _eqLogic.configuration : {}
   goveeText('span_goveeSku', conf.sku || '?')
   goveeText('span_goveeFirmware', (conf.wifi_soft ? 'Wi-Fi ' + conf.wifi_soft : '') + (conf.ble_soft ? ' · BLE ' + conf.ble_soft : ''))
@@ -220,6 +257,13 @@ function addCmdToTable(_cmd) {
 /* Pages chargées en ajax : ce script est réexécuté à chaque visite. Les
    gestionnaires sont redéfinis à chaque fois ; l'écouteur, lui, n'est posé
    qu'une fois sur le document. */
+function goveeWledToggle(_event) {
+  var t = _event.target
+  if (t && t.classList && t.classList.contains('eqLogicAttr') && /^wled_/.test(t.getAttribute('data-l2key') || '')) {
+    goveeWledFields()
+  }
+}
+
 window.goveeHandlers = {
   click: function (_event) {
     var target = _event.target
@@ -235,7 +279,8 @@ window.goveeHandlers = {
       bt_goveeScanGo: goveeScan,
       bt_goveeSearchClose: function () { goveeEl('div_goveeSearch').style.display = 'none' },
       bt_goveeRefresh: goveeRefresh,
-      bt_goveeScenes: goveeScenes
+      bt_goveeScenes: goveeScenes,
+      bt_goveeCopyAddress: goveeCopyAddress
     }
     for (var id in actions) {
       if (target.closest('#' + id) !== null) {
@@ -245,6 +290,8 @@ window.goveeHandlers = {
       }
     }
   },
+  change: function (_event) { goveeWledToggle(_event) },
+  input: function (_event) { goveeWledToggle(_event) },
   keydown: function (_event) {
     if (_event.key === 'Enter' && _event.target && _event.target.id === 'in_goveeIps') {
       _event.preventDefault()
@@ -253,13 +300,20 @@ window.goveeHandlers = {
   }
 }
 
-if (!window.goveeListening) {
-  window.goveeListening = true
-  ;['click', 'keydown'].forEach(function (_type) {
-    document.addEventListener(_type, function (_event) {
-      if (window.goveeHandlers && typeof window.goveeHandlers[_type] === 'function') {
-        window.goveeHandlers[_type](_event)
-      }
-    })
-  })
+/* Un écouteur par type, posé une seule fois par fenêtre (drapeau propre à
+   chaque type : une fenêtre déjà ouverte reçoit les types ajoutés depuis). */
+if (window.goveeListening) {
+  /* Écouteurs posés par une version précédente de ce script. */
+  window.goveeListening_click = true
+  window.goveeListening_keydown = true
 }
+;['click', 'keydown', 'change', 'input'].forEach(function (_type) {
+  var flag = 'goveeListening_' + _type
+  if (window[flag]) { return }
+  window[flag] = true
+  document.addEventListener(_type, function (_event) {
+    if (window.goveeHandlers && typeof window.goveeHandlers[_type] === 'function') {
+      window.goveeHandlers[_type](_event)
+    }
+  })
+})

@@ -1,5 +1,17 @@
 # Changelog — plugin Govee LAN
 
+## 0.4.1 (beta)
+
+- Commandes WLED pour les scénarios : suivre / ne plus suivre le WLED (sans
+  perdre l'adresse), suivi actif, WLED suivi joignable, régler la copie en
+  direct et son état.
+- Page Santé : connexion à chaque WLED suivi, port et clients de l'appli
+  WLED, port de la synchro UDP.
+- Page de l'équipement : champs WLED affichés selon ce qui est coché,
+  adresse à saisir dans l'appli WLED, avec un bouton pour la copier.
+- Description du plugin à jour (fonctions WLED). Exemple de scénario
+  « Soirée musique » dans la documentation.
+
 ## 0.4.0 (beta)
 
 - Copier les couleurs en direct : la lampe rejoue en temps réel les LED du

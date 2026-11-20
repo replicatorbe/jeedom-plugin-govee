@@ -188,7 +188,7 @@ $eqLogics = eqLogic::byType($plugin->getId());
 									<span class="help-block" style="margin:0;">{{Adresse IP d'un WLED (port facultatif) : la lampe suit son allumage, sa luminosité et sa couleur fixe en une seconde, même sur un autre VLAN. Avec « Annoncer aux WLED », le WLED suivi reçoit aussi les changements de la lampe. Laisser vide pour ne suivre aucun WLED.}}</span>
 								</div>
 							</div>
-							<div class="form-group">
+							<div class="form-group" id="div_goveeMirror">
 								<label class="col-sm-3 control-label">{{Copier les couleurs en direct}}</label>
 								<div class="col-sm-5">
 									<select class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="wled_mirror">
@@ -238,22 +238,30 @@ $eqLogics = eqLogic::byType($plugin->getId());
 									<span class="help-block" style="margin:0;">{{La lampe répond comme un WLED sur le port ci-dessous : l'appli WLED la pilote, et chaque geste exécute les commandes de cet équipement. Démon requis. Accessible sans mot de passe depuis tout le réseau local.}}</span>
 								</div>
 							</div>
-							<div class="form-group">
+							<div class="form-group goveeApiOnly">
 								<label class="col-sm-3 control-label">{{Port}}</label>
 								<div class="col-sm-5">
 									<input type="number" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="wled_api_port" placeholder="8180" min="1025" max="65535">
 								</div>
 								<div class="col-sm-4">
-									<span class="help-block" style="margin:0;">
-										<?php
-										$jeedomIp = '';
-										try {
-											$jeedomIp = (string) network::getNetworkAccess('internal', 'ip');
-										} catch (Exception $e) {
-										}
-										echo '{{Un port par lampe. Dans l\'appli WLED, ajoutez l\'appareil à la main avec l\'adresse}} <code>' . htmlspecialchars($jeedomIp !== '' ? $jeedomIp : 'IP-de-Jeedom') . ':port</code>. {{La recherche automatique de l\'appli ne garde pas le port : elle ne trouvera pas la lampe.}}';
-										?>
-									</span>
+									<span class="help-block" style="margin:0;">{{Un port différent par lampe.}}</span>
+								</div>
+							</div>
+							<?php
+							$jeedomIp = '';
+							try {
+								$jeedomIp = (string) network::getNetworkAccess('internal', 'ip');
+							} catch (Exception $e) {
+							}
+							?>
+							<div class="form-group goveeApiOnly">
+								<label class="col-sm-3 control-label">{{Adresse pour l'appli}}</label>
+								<div class="col-sm-5">
+									<code id="code_goveeApiAddress" data-ip="<?php echo htmlspecialchars($jeedomIp !== '' ? $jeedomIp : 'IP-de-Jeedom'); ?>"></code>
+									<a class="btn btn-default btn-xs" id="bt_goveeCopyAddress" style="margin-left:6px;"><i class="fas fa-copy"></i> {{Copier}}</a>
+								</div>
+								<div class="col-sm-4">
+									<span class="help-block" style="margin:0;">{{Dans l'appli WLED, ajoutez l'appareil à la main avec cette adresse : sa recherche automatique ne garde pas le port et ne trouvera pas la lampe.}}</span>
 								</div>
 							</div>
 							<legend><i class="fas fa-info-circle"></i> {{Identité}}</legend>
