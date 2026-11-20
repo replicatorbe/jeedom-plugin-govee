@@ -1,7 +1,7 @@
 {
     "id": "govee",
     "name": "Govee LAN",
-    "pluginVersion": "0.2.0",
+    "pluginVersion": "0.3.0",
     "description": {
         "fr_FR": "Pilote en réseau local les lampes Govee Wi-Fi, sans cloud, sans compte et sans clé API, par l'API LAN de Govee (option « LAN Control » de l'application). Le plugin trouve les lampes du réseau, ou les ajoute par adresse IP quand elles sont sur un autre VLAN, et crée les commandes d'une lumière Jeedom : allumer, éteindre, luminosité, couleur, température de blanc, avec retour d'état relevé par un démon, y compris pour les changements faits depuis l'application ou à la voix. Pour le lampadaire Uplighter H60B0, chaque zone (haut, anneau latéral, bas) se pilote à part : allumage, luminosité, couleur, blanc, et vitesse de l'effet projeté. Une commande d'envoi de trames brutes permet d'expérimenter d'autres modèles. Aucune dépendance à installer.",
         "en_US": "Drives Govee Wi-Fi lights over the local network, with no cloud, no account and no API key, through Govee's LAN API (the \"LAN Control\" option in the Govee app). The plugin finds lights on the network, or adds them by IP address when they sit on another VLAN, and creates the commands of a Jeedom light: on, off, brightness, colour, white temperature, with state read back by a daemon, including changes made from the app or by voice. For the Uplighter H60B0 floor lamp, each zone (top, side ring, bottom) is driven separately: on/off, brightness, colour, white, and speed of the projected effect. A raw frame command allows experimenting with other models. Nothing to install."

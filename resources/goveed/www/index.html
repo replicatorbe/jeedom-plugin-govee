@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Govee</title>
+<!--
+  Page de commande d'une lampe Govee émulée en WLED (plugin Jeedom Govee LAN).
+  L'appli WLED l'affiche comme écran de commande de l'appareil. Chaque geste
+  devient une commande de l'équipement Jeedom (clé « gv » de /json/state,
+  ou numéro d'effet WLED) ; l'état arrive par le WebSocket /ws, ou par
+  /json/si toutes les trois secondes si le WebSocket est fermé.
+-->
+<style>
+  :root { --bg:#111; --card:#1e1e1e; --line:#333; --text:#eee; --dim:#9a9a9a; --accent:#ffa000; --on:#000; --err:#ef9a9a; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f2f2f2; --card:#fff; --line:#d6d6d6; --text:#222; --dim:#666; --err:#c62828; } }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--text); font:16px/1.4 system-ui, -apple-system, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+  h1 { font-size:20px; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  h2 { font-size:16px; margin:0; flex:1; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .card.off .ctl { opacity:.45; }
+  .head { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .row { display:grid; grid-template-columns:96px 1fr 56px; align-items:center; gap:8px; min-height:44px; }
+  .row label { color:var(--dim); }
+  .row .val { text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; }
+  @media (max-width: 400px) {
+    .row { grid-template-columns:1fr 56px; row-gap:0; }
+    .row label { grid-column:1 / -1; padding-top:6px; }
+  }
+  input[type=range] { width:100%; height:44px; margin:0; accent-color:var(--accent); }
+  input[type=color] { width:64px; height:44px; border:1px solid var(--line); border-radius:8px; background:none; padding:2px; }
+  select { width:100%; min-height:44px; padding:8px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:16px; }
+  button { font:inherit; cursor:pointer; }
+  .power { width:56px; height:56px; flex:none; border-radius:50%; border:2px solid var(--line); background:var(--card); color:var(--dim); font-size:26px; }
+  .power[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:var(--on); }
+  .toggle { min-width:96px; min-height:44px; padding:6px 14px; border-radius:22px; border:1px solid var(--line); background:var(--bg); color:var(--dim); }
+  .toggle[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:var(--on); }
+  .go { min-width:56px; min-height:44px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  .fxrow { display:grid; grid-template-columns:1fr 56px; gap:8px; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:10px; border:1px solid var(--accent); color:var(--accent); font-size:13px; }
+  .status { font-size:13px; color:var(--dim); }
+  .note { font-size:13px; color:var(--dim); margin:6px 0 0; }
+  .error { color:var(--err); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <button id="power" class="power" aria-pressed="false" aria-label="Allumer ou éteindre la lampe">⏻</button>
+  <div style="flex:1;min-width:0">
+    <h1 id="name">Govee</h1>
+    <div><span id="status" class="status" aria-live="polite">Connexion…</span> <span id="mode" class="badge hidden"></span></div>
+  </div>
+</header>
+<div id="error" class="error hidden" role="alert"></div>
+
+<div class="card" id="mainCard">
+  <div class="head"><h2 id="mainTitle">Lumière</h2></div>
+  <div class="row"><label for="bri">Luminosité</label><input id="bri" type="range" min="1" max="100"><span id="briVal" class="val"></span></div>
+  <div class="row"><label for="color">Couleur</label><input id="color" type="color"><span></span></div>
+  <div class="row"><label for="kelvin">Température (blanc)</label><input id="kelvin" type="range" step="50"><span id="kVal" class="val"></span></div>
+</div>
+
+<div class="card">
+  <div class="head"><h2>Effet</h2></div>
+  <div class="fxrow">
+    <select id="scene" aria-label="Effet"><option value="0">— Aucun (couleur fixe)</option></select>
+    <button id="sceneGo" class="go" aria-label="Lancer l'effet choisi">▶</button>
+  </div>
+  <p id="sceneErr" class="note hidden">Liste des effets indisponible, nouvel essai…</p>
+</div>
+
+<div id="zonesNote" class="note hidden" style="margin:-4px 4px 10px">Deux zones au plus restent allumées : en allumer une troisième éteint celle allumée depuis le plus longtemps.</div>
+<div id="zones"></div>
+
+<div id="musicCard" class="card hidden">
+  <div class="head"><h2>Mode musique</h2><button id="musicToggle" class="toggle" aria-pressed="false">Désactivé</button></div>
+  <div class="row"><label for="musicMode">Mode</label><select id="musicMode"></select><span></span></div>
+  <div class="row"><label for="sens">Sensibilité</label><input id="sens" type="range" min="0" max="100"><span id="sensVal" class="val"></span></div>
+  <p class="note">Choisir un mode active la musique. Sensibilité réglée hors musique : retenue pour la prochaine fois.</p>
+</div>
+
+<script>
+'use strict';
+var state = null, info = null, ws = null, pollTimer = null, built = false, held = null, errTimer = null;
+var $ = function (id) { return document.getElementById(id); };
+var MODES = { color: 'Couleur', white: 'Blanc', scene: 'Effet', music: 'Musique' };
+
+function esc(t) { var d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+function showError(text) {
+  var e = $('error');
+  e.textContent = text; e.classList.remove('hidden');
+  clearTimeout(errTimer);
+  errTimer = setTimeout(function () { e.classList.add('hidden'); }, 5000);
+}
+
+/* Un ordre (format WLED, ou clé gv). La réponse est l'état retenu : il est
+ * affiché tel quel, y compris quand l'ordre a été refusé. */
+function send(order) {
+  order.v = true;
+  return fetch('/json/state', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(order)
+  }).then(function (r) {
+    if (!r.ok) { throw new Error('HTTP ' + r.status); }
+    return r.json();
+  }).then(function (s) {
+    if (s && s.gv) {
+      if (s.gv.error) { showError('Refusé : ' + s.gv.error); }
+      state = s; render();
+    }
+  }).catch(function (e) {
+    showError('Ordre non transmis (' + e.message + ')');
+    poll();
+  });
+}
+function cmd(logicalId, options) { return send({ gv: { cmd: logicalId, options: options || {} } }); }
+
+/* Un curseur tenu au doigt n'est pas repris par un état qui arrive. */
+function hold(el) {
+  el.addEventListener('pointerdown', function () { held = el; });
+  el.addEventListener('pointerup', function () { setTimeout(function () { if (held === el) { held = null; } }, 300); });
+  el.addEventListener('pointercancel', function () { held = null; });
+}
+function setRange(el, value, label, unit) {
+  if (held === el) { return; }
+  el.value = value; if (label) { label.textContent = value + unit; }
+}
+function slider(el, label, unit, onCommit) {
+  hold(el);
+  el.addEventListener('input', function () { label.textContent = el.value + unit; });
+  el.addEventListener('change', function () { held = null; onCommit(+el.value); });
+}
+
+function loadEffects(tries) {
+  fetch('/json/eff').then(function (r) { return r.json(); }).then(function (list) {
+    var sel = $('scene');
+    list.forEach(function (name, i) {
+      if (i === 0) { return; }
+      var o = document.createElement('option'); o.value = i; o.textContent = name; sel.appendChild(o);
+    });
+    $('sceneErr').classList.add('hidden');
+    render();
+  }).catch(function () {
+    $('sceneErr').classList.remove('hidden');
+    setTimeout(function () { loadEffects(tries + 1); }, Math.min(30000, 3000 * (tries + 1)));
+  });
+}
+
+function build() {
+  if (built || !info) { return; }
+  built = true;
+  var gv = info.gv || {}, k = gv.k || [2000, 9000];
+  $('name').textContent = info.name || 'Govee';
+  document.title = info.name || 'Govee';
+  $('kelvin').min = k[0]; $('kelvin').max = k[1];
+  loadEffects(0);
+  var zones = gv.zones || {}, keys = Object.keys(zones);
+  if (keys.length) {
+    $('mainTitle').textContent = 'Toute la lampe';
+    $('zonesNote').classList.remove('hidden');
+  }
+  keys.forEach(function (z) {
+    var spec = zones[z], card = document.createElement('div'), n = esc(spec.name);
+    card.className = 'card'; card.id = 'zone-' + z;
+    card.innerHTML = '<div class="head"><h2>' + n + '</h2><button class="toggle" aria-pressed="false" data-z="' + z + '" aria-label="' + n + ' : allumer ou éteindre">Éteinte</button></div>'
+      + '<div class="row ctl"><label for="zb-' + z + '">Luminosité</label><input id="zb-' + z + '" type="range" min="1" max="100"><span class="val" id="zbv-' + z + '"></span></div>'
+      + (spec.rgb ? '<div class="row ctl"><label for="zc-' + z + '">Couleur</label><input id="zc-' + z + '" type="color"><span></span></div>' : '')
+      + '<div class="row ctl"><label for="zk-' + z + '">Température (blanc)</label><input id="zk-' + z + '" type="range" step="50" min="' + k[0] + '" max="' + k[1] + '"><span class="val" id="zkv-' + z + '"></span></div>';
+    $('zones').appendChild(card);
+    card.querySelector('[data-z]').onclick = function () {
+      cmd('zone_' + z + (this.getAttribute('aria-pressed') === 'true' ? '_off' : '_on'));
+    };
+    slider($('zb-' + z), $('zbv-' + z), ' %', function (v) { cmd('zone_' + z + '_brightness_set', { slider: v }); });
+    slider($('zk-' + z), $('zkv-' + z), ' K', function (v) { cmd('zone_' + z + '_colortemp_set', { slider: v }); });
+    if (spec.rgb) { $('zc-' + z).addEventListener('change', function () { cmd('zone_' + z + '_color_set', { color: this.value }); }); }
+  });
+  if (gv.uplighter && gv.music && gv.music.length) {
+    $('musicCard').classList.remove('hidden');
+    gv.music.forEach(function (m) { var o = document.createElement('option'); o.value = m; o.textContent = m; $('musicMode').appendChild(o); });
+  }
+}
+
+function render() {
+  if (!state || !state.gv) { return; }
+  build();
+  var g = state.gv, seg0 = (state.seg || [])[0] || {};
+  $('power').setAttribute('aria-pressed', state.on ? 'true' : 'false');
+  $('status').textContent = !g.online ? 'Lampe injoignable' : (state.on ? 'Allumée' : 'Éteinte');
+  $('status').classList.toggle('error', !g.online);
+  var mode = $('mode');
+  if (state.on && MODES[g.mode]) {
+    mode.textContent = MODES[g.mode] + (g.mode === 'scene' && g.scene ? ' : ' + g.scene : '') + (g.mode === 'music' && g.music_mode ? ' : ' + g.music_mode : '');
+    mode.classList.remove('hidden');
+  } else {
+    mode.classList.add('hidden');
+  }
+  setRange($('bri'), g.brightness, $('briVal'), ' %');
+  if (document.activeElement !== $('color')) { $('color').value = g.color || '#ffffff'; }
+  setRange($('kelvin'), g.colortemp, $('kVal'), ' K');
+  if (document.activeElement !== $('scene')) { $('scene').value = String(seg0.fx || 0); }
+  Object.keys(g.zones || {}).forEach(function (z) {
+    var zs = g.zones[z], b = document.querySelector('[data-z="' + z + '"]');
+    if (!b) { return; }
+    b.setAttribute('aria-pressed', zs.on ? 'true' : 'false'); b.textContent = zs.on ? 'Allumée' : 'Éteinte';
+    $('zone-' + z).classList.toggle('off', !zs.on);
+    setRange($('zb-' + z), zs.brightness, $('zbv-' + z), ' %');
+    var c = $('zc-' + z);
+    if (c && document.activeElement !== c) { c.value = zs.color; }
+    setRange($('zk-' + z), zs.colortemp, $('zkv-' + z), ' K');
+  });
+  $('musicToggle').setAttribute('aria-pressed', g.music ? 'true' : 'false');
+  $('musicToggle').textContent = g.music ? 'Activé' : 'Désactivé';
+  if (g.music_mode && document.activeElement !== $('musicMode')) { $('musicMode').value = g.music_mode; }
+  setRange($('sens'), g.music_sensitivity, $('sensVal'), ' %');
+}
+
+function receive(data) {
+  if (data && data.info) { info = data.info; }
+  if (data && data.state) { state = data.state; }
+  render();
+}
+
+function poll() {
+  fetch('/json/si').then(function (r) {
+    if (r.status === 503) { $('status').textContent = 'Démarrage du démon…'; return null; }
+    return r.json();
+  }).then(function (d) { if (d) { receive(d); } }).catch(function () {
+    $('status').textContent = 'Jeedom injoignable';
+  });
+}
+
+function connect() {
+  try { ws = new WebSocket('ws://' + location.host + '/ws'); } catch (e) { ws = null; }
+  if (!ws) { pollTimer = pollTimer || setInterval(poll, 3000); return; }
+  ws.onmessage = function (e) { try { receive(JSON.parse(e.data)); } catch (x) {} };
+  ws.onopen = function () { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
+  ws.onclose = function () { ws = null; pollTimer = pollTimer || setInterval(poll, 3000); setTimeout(connect, 5000); };
+}
+
+$('power').onclick = function () { cmd(state && state.on ? 'off' : 'on'); };
+slider($('bri'), $('briVal'), ' %', function (v) { cmd('brightness_set', { slider: v }); });
+slider($('kelvin'), $('kVal'), ' K', function (v) { cmd('colortemp_set', { slider: v }); });
+slider($('sens'), $('sensVal'), ' %', function (v) { cmd('music_sensitivity_set', { slider: v }); });
+$('color').addEventListener('change', function () { cmd('color_set', { color: this.value }); });
+function launchScene() { send({ seg: [{ id: 0, fx: +$('scene').value }] }); }
+$('scene').addEventListener('change', launchScene);
+$('sceneGo').onclick = launchScene;
+$('musicToggle').onclick = function () { cmd(this.getAttribute('aria-pressed') === 'true' ? 'music_off' : 'music_on'); };
+$('musicMode').addEventListener('change', function () { cmd('music_set', { select: this.value }); });
+
+poll();
+connect();
+</script>
+</body>
+</html>

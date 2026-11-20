@@ -16,6 +16,8 @@
  */
 
 require_once __DIR__ . '/../../../../core/php/core.inc.php';
+/* Codec de la synchro WLED, partagé avec le démon. */
+require_once __DIR__ . '/../../resources/goveed/wledsync.php';
 
 /*
  * Pilotage local des lampes Govee Wi-Fi, par l'API LAN (UDP), sans cloud.
@@ -47,6 +49,16 @@ class govee extends eqLogic {
 
     const DEFAULT_PORT = 55241;
     const DEFAULT_INTERVAL = 10;
+    /* Port de la synchro WLED (« UDP notifier »), celui de WLED par défaut. */
+    const DEFAULT_WLED_PORT = 21324;
+    /* Port HTTP par défaut d'une lampe émulée en WLED (appli WLED). */
+    const WLED_API_PORT = 8180;
+    /* Ports qu'une lampe émulée ne peut pas prendre. */
+    const WLED_API_RESERVED = array(80, 443, 4001, 4002, 4003, 21324);
+    /* Zones d'un Uplighter, dans l'ordre des segments WLED. */
+    const WLED_ZONE_ORDER = array('top', 'side', 'bottom');
+    /* LED fictives par segment : l'appli n'en affiche que le nombre. */
+    const WLED_SEG_LEN = 30;
 
     /* Écart minimal entre deux datagrammes vers une même lampe, quand le
      * plugin envoie lui-même (démon arrêté). */
@@ -120,7 +132,11 @@ class govee extends eqLogic {
         }
         try {
             foreach (self::scan(array(), 3) as $found) {
-                self::updateAddress($found);
+                try {
+                    self::updateAddress($found);
+                } catch (Throwable $e) {
+                    log::add(__CLASS__, 'warning', 'Recherche horaire, ' . $found['ip'] . ' : ' . $e->getMessage());
+                }
             }
         } catch (Throwable $e) {
             log::add(__CLASS__, 'debug', 'Recherche horaire : ' . $e->getMessage());
@@ -186,6 +202,11 @@ class govee extends eqLogic {
         $cmd .= ' --interval ' . (int) config::byKey('poll_interval', __CLASS__, self::DEFAULT_INTERVAL);
         $cmd .= ' --loglevel ' . escapeshellarg(log::convertLogLevel(log::getLogLevel(__CLASS__)));
         $cmd .= ' --timezone ' . escapeshellarg(date_default_timezone_get());
+        $cmd .= ' --wledport ' . (int) self::wledPort();
+        $targets = self::wledTargets();
+        if (!empty($targets)) {
+            $cmd .= ' --wledtargets ' . escapeshellarg(implode(',', $targets));
+        }
         /* La clé API passe par un fichier lisible du seul www-data, que le
          * démon efface après l'avoir lu : jamais en argument, que ps montre à
          * tous. */
@@ -268,13 +289,75 @@ class govee extends eqLogic {
         return is_array($reply) ? $reply : null;
     }
 
+    public static function wledPort() {
+        $port = (int) config::byKey('wled_port', __CLASS__, self::DEFAULT_WLED_PORT);
+        return ($port > 1024 && $port < 65536) ? $port : self::DEFAULT_WLED_PORT;
+    }
+
+    /* Adresses où annoncer les changements, en plus du broadcast local. */
+    public static function wledTargets() {
+        $list = array();
+        foreach (preg_split('/[\s,;]+/', (string) config::byKey('wled_targets', __CLASS__, ''), -1, PREG_SPLIT_NO_EMPTY) as $ip) {
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $list[] = $ip;
+            }
+        }
+        return array_values(array_unique($list));
+    }
+
+    /* Adresse IPv4 d'un WLED, port facultatif ; '' si illisible. */
+    public static function wledAddress($_text) {
+        $text = trim((string) $_text);
+        if (!preg_match('/^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$/', $text, $m)
+            || !filter_var($m[1], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || (isset($m[2]) && ((int) $m[2] < 1 || (int) $m[2] > 65535))) {
+            return '';
+        }
+        return $text;
+    }
+
+    /* WLED connus du plugin WLED (wledbe), pour proposer une adresse. */
+    public static function knownWled() {
+        $list = array();
+        if (!class_exists('wledbe')) {
+            return $list;
+        }
+        foreach (eqLogic::byType('wledbe') as $eq) {
+            $address = self::wledAddress($eq->getConfiguration('ip', ''));
+            if ($address !== '') {
+                $list[$address] = $eq->getHumanName();
+            }
+        }
+        return $list;
+    }
+
+    /* Réglages de synchro WLED d'une lampe, pour le démon. */
+    public function wledConfig() {
+        return array(
+            'recv'   => (int) $this->getConfiguration('wled_recv', 0) === 1,
+            'send'   => (int) $this->getConfiguration('wled_send', 0) === 1,
+            'groups' => wledGroupMask($this->getConfiguration('wled_groups', '1')),
+            'k'      => $this->kelvinRange(),
+            'follow' => self::wledAddress($this->getConfiguration('wled_follow', '')),
+        );
+    }
+
     /* Les lampes que le démon doit suivre. */
     public static function daemonDevices() {
         $list = array();
         foreach (self::byType(__CLASS__, true) as $eqLogic) {
             $ip = (string) $eqLogic->getConfiguration('ip', '');
             if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                $list[] = array('eq' => (int) $eqLogic->getId(), 'ip' => $ip, 'name' => $eqLogic->getHumanName());
+                $api = null;
+                if ($eqLogic->wledApiEnabled()) {
+                    /* Une lampe en défaut ne prive pas le démon des autres. */
+                    try {
+                        $api = array('port' => $eqLogic->wledApiPort(), 'json' => $eqLogic->wledJson());
+                    } catch (Throwable $e) {
+                        log::add(__CLASS__, 'error', $eqLogic->getHumanName() . ' : ' . __('émulation WLED impossible', __FILE__) . ' (' . $e->getMessage() . ')');
+                    }
+                }
+                $list[] = array('eq' => (int) $eqLogic->getId(), 'ip' => $ip, 'name' => $eqLogic->getHumanName(),
+                                'wled' => $eqLogic->wledConfig(), 'api' => $api);
             }
         }
         return $list;
@@ -488,6 +571,27 @@ class govee extends eqLogic {
     public function preSave() {
         $ip = trim((string) $this->getConfiguration('ip', ''));
         $this->setConfiguration('ip', $ip);
+        /* Une saisie illisible est refusée plutôt qu'ignorée en silence. */
+        $follow = trim((string) $this->getConfiguration('wled_follow', ''));
+        $this->setConfiguration('wled_follow', $follow);
+        if ($follow !== '' && self::wledAddress($follow) === '') {
+            throw new Exception(sprintf(__('Adresse du WLED à suivre illisible : %s. Donnez son adresse IP (192.168.1.50), éventuellement suivie du port (192.168.1.50:80).', __FILE__), $follow));
+        }
+        $groups = trim((string) $this->getConfiguration('wled_groups', ''));
+        if ($groups !== '' && !preg_match('/^\s*[1-8](\s*[,; ]\s*[1-8])*\s*$/', $groups)) {
+            throw new Exception(sprintf(__('Groupes de synchro illisibles : %s. Des numéros de 1 à 8, séparés par des virgules.', __FILE__), $groups));
+        }
+        if ($this->wledApiEnabled()) {
+            $port = (int) $this->getConfiguration('wled_api_port', self::WLED_API_PORT);
+            if ($port <= 1024 || $port >= 65536 || in_array($port, self::WLED_API_RESERVED, true) || $port === self::controlPort()) {
+                throw new Exception(sprintf(__('Port %s refusé pour l\'émulation WLED : choisissez-en un entre 1025 et 65535, libre.', __FILE__), $port));
+            }
+            foreach (self::byType(__CLASS__) as $other) {
+                if ($other->getId() != $this->getId() && $other->wledApiEnabled() && $other->wledApiPort() === $port) {
+                    throw new Exception(sprintf(__('Le port %s est déjà pris par %s.', __FILE__), $port, $other->getHumanName()));
+                }
+            }
+        }
         /* Pas d'exception à la création (le coeur crée l'équipement avec son
          * seul nom) : une adresse invalide est simplement ignorée par le
          * démon et signalée à l'envoi. */
@@ -751,6 +855,350 @@ class govee extends eqLogic {
             }
         }
         return $this->pollDirect();
+    }
+
+    /* ==================================================== ÉMULATION WLED */
+
+    /*
+     * Une lampe peut se présenter comme un WLED à l'appli WLED : le démon
+     * sert l'API JSON et le WebSocket de WLED sur un port propre à la lampe,
+     * et passe ici chaque ordre reçu. Jeedom reste la source de vérité : un
+     * ordre WLED devient l'exécution des commandes de l'équipement, et l'état
+     * WLED se déduit de ses commandes info.
+     *
+     * Une lampe simple est un seul segment ; un Uplighter en a trois, un par
+     * zone (0 haute, 1 anneau, 2 basse). Les effets WLED sont les effets de
+     * l'application Govee, précédés de « Solid ». Une clé « gv », ignorée
+     * des clients WLED, donne accès aux commandes de la lampe et à leur état :
+     * c'est par elle que la page de commande servie à l'appli travaille.
+     */
+
+    public function wledApiEnabled() {
+        return (int) $this->getConfiguration('wled_api', 0) === 1;
+    }
+
+    public function wledApiPort() {
+        $port = (int) $this->getConfiguration('wled_api_port', self::WLED_API_PORT);
+        return ($port > 1024 && $port < 65536) ? $port : self::WLED_API_PORT;
+    }
+
+    /* Une MAC stable et propre à la lampe : l'appli WLED en fait sa clé. Les
+     * six derniers octets de l'identifiant Govee, qui sont ceux de la MAC
+     * Wi-Fi de la lampe. */
+    public function wledMac() {
+        $hex = strtolower((string) preg_replace('/[^0-9a-fA-F]/', '', (string) $this->getLogicalId()));
+        if (strlen($hex) < 12) {
+            $hex = substr(md5('govee-' . $this->getId()), 0, 12);
+        }
+        return substr($hex, -12);
+    }
+
+    /* Effets de la lampe, dans l'ordre des effets WLED (le 0, « Solid »,
+     * mis à part) : nom unique (un doublon prend sa catégorie, comme dans la
+     * liste de la commande) et code Govee. */
+    public function wledScenes() {
+        $count = array();
+        $scenes = self::sceneCatalogue((string) $this->getConfiguration('sku', ''));
+        foreach ($scenes as $s) {
+            $n = strtolower($s['name']);
+            $count[$n] = isset($count[$n]) ? $count[$n] + 1 : 1;
+        }
+        $list = array();
+        foreach ($scenes as $s) {
+            $list[] = array('name' => $count[strtolower($s['name'])] > 1 ? $s['name'] . ' (' . $s['category'] . ')' : $s['name'],
+                            'code' => (int) $s['code']);
+        }
+        return $list;
+    }
+
+    public function wledEffects() {
+        return array_merge(array('Solid'), array_column($this->wledScenes(), 'name'));
+    }
+
+    /* Numéro d'effet WLED de l'effet Govee en cours, 0 sans effet. */
+    private function wledFx() {
+        $name = (string) $this->info('scene', '');
+        if ($name === '') {
+            return 0;
+        }
+        $code = (int) $this->getCache('scene_code', 0);
+        $byName = 0;
+        foreach ($this->wledScenes() as $i => $s) {
+            if ($code > 0 && $s['code'] === $code) {
+                return $i + 1;
+            }
+            if ($byName === 0 && strcasecmp(preg_replace('/ \(.*\)$/', '', $s['name']), $name) === 0) {
+                $byName = $i + 1;
+            }
+        }
+        return $byName;
+    }
+
+    /* Une couleur lue dans une commande info, sans exception : un état
+     * illisible ne doit pas priver le démon de la liste des lampes. */
+    private function infoRgb($_logicalId, $_default) {
+        try {
+            return self::hexToRgb((string) $this->info($_logicalId, $_default));
+        } catch (Throwable $e) {
+            return self::hexToRgb($_default);
+        }
+    }
+
+    /* Ce que la lampe fait : musique, effet, blanc ou couleur. Le blanc se
+     * lit dans le dernier relevé (une température non nulle). */
+    private function wledMode($_fx) {
+        if ((int) $this->info('music', 0) === 1) {
+            return 'music';
+        }
+        if ($_fx > 0) {
+            return 'scene';
+        }
+        $status = $this->getCache('last_status', array());
+        return (is_array($status) && isset($status['colorTemInKelvin']) && (int) $status['colorTemInKelvin'] > 0) ? 'white' : 'color';
+    }
+
+    /* Kelvin vers le CCT relatif (0 chaud, 255 froid) de l'état WLED. */
+    private function wledCct($_kelvin) {
+        list($kMin, $kMax) = $this->kelvinRange();
+        return (int) max(0, min(255, round(($_kelvin - $kMin) * 255 / max(1, $kMax - $kMin))));
+    }
+
+    private function wledBri($_percent) {
+        return max(1, min(255, (int) round((int) $_percent * 255 / 100)));
+    }
+
+    private function wledSegment($_id, $_on, $_bri, $_rgb, $_kelvin, $_fx) {
+        return array(
+            'id' => $_id, 'start' => $_id * self::WLED_SEG_LEN, 'stop' => ($_id + 1) * self::WLED_SEG_LEN, 'len' => self::WLED_SEG_LEN,
+            'grp' => 1, 'spc' => 0, 'of' => 0, 'on' => (bool) $_on, 'frz' => false, 'bri' => $_bri, 'cct' => $this->wledCct($_kelvin),
+            'set' => 0, 'n' => '', 'col' => array(array_values($_rgb), array(0, 0, 0), array(0, 0, 0)), 'fx' => $_fx, 'sx' => 128,
+            'ix' => 128, 'pal' => 0, 'c1' => 128, 'c2' => 128, 'c3' => 16,
+            /* Seul le segment 0 est sélectionné : c'est lui que vise un ordre
+             * de segment sans numéro. */
+            'sel' => $_id === 0, 'rev' => false, 'mi' => false,
+            'o1' => false, 'o2' => false, 'o3' => false, 'si' => 0, 'm12' => 0,
+        );
+    }
+
+    public function wledState() {
+        $on = (int) $this->info('state', 0) === 1;
+        $kelvin = (int) $this->info('colortemp', 4000);
+        $scene = (string) $this->info('scene', '');
+        $fx = $this->wledFx();
+        $segs = array();
+        $zones = array();
+        if ($this->isUplighter()) {
+            foreach (self::WLED_ZONE_ORDER as $id => $zone) {
+                $zk = (int) $this->info('zone_' . $zone . '_colortemp', 4000);
+                $rgb = self::ZONES[$zone]['rgb'] ? $this->infoRgb('zone_' . $zone . '_color', '#ffffff') : self::kelvinToRgb($zk);
+                $zOn = (int) $this->info('zone_' . $zone . '_state', 0) === 1;
+                $zBri = (int) $this->info('zone_' . $zone . '_brightness', 100);
+                $segs[] = $this->wledSegment($id, $zOn, $this->wledBri($zBri), $rgb, $zk, $id === 0 ? $fx : 0);
+                $zones[$zone] = array('on' => $zOn, 'brightness' => $zBri, 'color' => self::rgbToHex($rgb), 'colortemp' => $zk);
+            }
+        } else {
+            $segs[] = $this->wledSegment(0, true, 255, $this->infoRgb('color', '#ffffff'), $kelvin, $fx);
+        }
+        return array(
+            'on' => $on, 'bri' => $this->wledBri($this->info('brightness', 100)), 'transition' => 7, 'ps' => -1, 'pl' => -1,
+            'nl' => array('on' => false, 'dur' => 60, 'mode' => 1, 'tbri' => 0, 'rem' => -1),
+            'udpn' => array('send' => false, 'recv' => false, 'sgrp' => 1, 'rgrp' => 1),
+            'lor' => 0, 'mainseg' => 0, 'seg' => $segs,
+            'gv' => array(
+                'mode' => $this->wledMode($fx),
+                'online' => (int) $this->info('online', 0) === 1,
+                'brightness' => (int) $this->info('brightness', 100),
+                'color' => self::rgbToHex($this->infoRgb('color', '#ffffff')),
+                'colortemp' => $kelvin,
+                'scene' => $scene,
+                'music' => (int) $this->info('music', 0) === 1,
+                'music_mode' => (string) $this->info('music_mode', ''),
+                'music_sensitivity' => (int) $this->info('music_sensitivity', self::MUSIC_SENSITIVITY),
+                'flow' => (int) $this->info('flow', 0),
+                'zones' => $zones,
+            ),
+        );
+    }
+
+    public function wledInfo() {
+        $uplighter = $this->isUplighter();
+        $count = $uplighter ? count(self::WLED_ZONE_ORDER) : 1;
+        /* Capacités par segment : 1 couleur, 4 blanc réglable. */
+        $seglc = $uplighter ? array(5, 5, 4) : array(5);
+        $zones = array();
+        if ($uplighter) {
+            foreach (self::WLED_ZONE_ORDER as $zone) {
+                $zones[$zone] = array('name' => self::ZONES[$zone]['name'], 'rgb' => self::ZONES[$zone]['rgb']);
+            }
+        }
+        $sku = (string) $this->getConfiguration('sku', '');
+        return array(
+            'ver' => '0.15.0', 'vid' => 2410270,
+            'leds' => array('count' => $count * self::WLED_SEG_LEN, 'pwr' => 0, 'fps' => 0, 'maxpwr' => 0, 'maxseg' => $count,
+                            'rgbw' => false, 'wv' => 0, 'cct' => true, 'lc' => 5, 'seglc' => $seglc),
+            'str' => false, 'name' => $this->getName(), 'udpport' => self::wledPort(), 'live' => false, 'liveseg' => -1,
+            'lm' => '', 'lip' => '', 'ws' => 0, 'fxcount' => count($this->wledEffects()), 'palcount' => 1, 'cpalcount' => 0,
+            'maps' => array(array('id' => 0)), 'wifi' => array('bssid' => '', 'rssi' => -50, 'signal' => 100, 'channel' => 1),
+            'fs' => array('u' => 0, 't' => 0, 'pmt' => 0), 'ndc' => 0, 'arch' => 'govee', 'core' => 'jeedom', 'lwip' => 0,
+            'freeheap' => 0, 'uptime' => 0, 'opt' => 0, 'brand' => 'WLED', 'product' => trim('Govee ' . $sku),
+            'mac' => $this->wledMac(), 'ip' => '',
+            'gv' => array('sku' => $sku, 'uplighter' => $uplighter, 'k' => $this->kelvinRange(), 'zones' => $zones,
+                          'music' => $uplighter ? array_values(self::MUSIC_MODES) : array()),
+        );
+    }
+
+    /* Ce que le démon sert pour cette lampe. */
+    public function wledJson() {
+        return array('state' => $this->wledState(), 'info' => $this->wledInfo(), 'effects' => $this->wledEffects());
+    }
+
+    /* Un CCT de WLED : un kelvin (≥ 1900), ou 0-255 du plus chaud au plus
+     * froid, ramené à la plage de la lampe. */
+    private function wledKelvin($_cct) {
+        list($kMin, $kMax) = $this->kelvinRange();
+        $cct = (int) $_cct;
+        $k = $cct >= 1900 ? $cct : $kMin + max(0, min(255, $cct)) * ($kMax - $kMin) / 255;
+        return (int) max($kMin, min($kMax, round($k)));
+    }
+
+    private static function wledRgbHex($_col) {
+        if (!is_array($_col) || count($_col) < 3) {
+            return null;
+        }
+        $c = array_values($_col);
+        return self::rgbToHex(array((int) $c[0], (int) $c[1], (int) $c[2]));
+    }
+
+    /*
+     * Un ordre WLED (POST /json/state, ou trame du WebSocket), traduit en
+     * commandes de l'équipement, exécutées comme depuis Jeedom (actions
+     * avant/après, valeurs calculées, timeline). Rend la liste des
+     * commandes exécutées.
+     *
+     * Sémantique de WLED : « on » vaut true, false ou "t" (bascule) ; « bri »
+     * à 0 éteint ; « seg » est une liste, ou un seul objet qui vise les
+     * segments sélectionnés (ici le 0) ; un champ absent ne change rien. Une
+     * luminosité de segment ne l'allume pas : sur une zone éteinte, elle est
+     * seulement retenue.
+     */
+    public function wledApply($_body) {
+        if (!is_array($_body)) {
+            throw new Exception(__('Ordre WLED illisible.', __FILE__));
+        }
+        $done = array();
+        $run = function ($_logicalId, $_options = array()) use (&$done) {
+            $cmd = $this->getCmd('action', $_logicalId);
+            if (!is_object($cmd)) {
+                throw new Exception(__('Commande inconnue :', __FILE__) . ' ' . $_logicalId);
+            }
+            $cmd->execCmd($_options);
+            $done[] = $_logicalId;
+        };
+
+        /* Extension de la page de commande : une commande action de la
+         * lampe, par son identifiant logique. */
+        if (isset($_body['gv']) && is_array($_body['gv']) && isset($_body['gv']['cmd'])) {
+            $logicalId = (string) $_body['gv']['cmd'];
+            if (!preg_match('/^[a-z0-9_]+$/', $logicalId) || in_array($logicalId, array('frames', 'refresh'), true)) {
+                throw new Exception(__('Commande refusée :', __FILE__) . ' ' . $logicalId);
+            }
+            $options = isset($_body['gv']['options']) && is_array($_body['gv']['options']) ? $_body['gv']['options'] : array();
+            $run($logicalId, array_intersect_key($options, array_flip(array('slider', 'color', 'select'))));
+        }
+
+        $on = array_key_exists('on', $_body) ? $_body['on'] : null;
+        if ($on === 't') {
+            $on = (int) $this->info('state', 0) !== 1;
+        }
+        if ($on === false || (isset($_body['bri']) && (int) $_body['bri'] <= 0)) {
+            $run('off');
+            return $done;
+        }
+        $segs = array();
+        if (isset($_body['seg']) && is_array($_body['seg'])) {
+            $segs = array_keys($_body['seg']) === range(0, count($_body['seg']) - 1) ? $_body['seg'] : array($_body['seg']);
+        }
+        $uplighter = $this->isUplighter();
+        foreach ($segs as $rank => $seg) {
+            if (!is_array($seg)) {
+                continue;
+            }
+            $id = isset($seg['id']) ? (int) $seg['id'] : (count($segs) === 1 ? 0 : (int) $rank);
+            $fx = isset($seg['fx']) ? (int) $seg['fx'] : -1;
+            $hex = isset($seg['col'][0]) ? self::wledRgbHex($seg['col'][0]) : null;
+            $cct = isset($seg['cct']) ? $this->wledKelvin($seg['cct']) : null;
+
+            /* Un effet, sur le segment principal : un effet Govee, désigné par
+             * son code (deux effets peuvent porter le même nom). */
+            if ($fx > 0 && $id === 0) {
+                $scenes = $this->wledScenes();
+                if (isset($scenes[$fx - 1])) {
+                    $run('scene_set', array('select' => (string) $scenes[$fx - 1]['code']));
+                }
+                continue;
+            }
+            /* « Solid » demandé pendant un effet, sans couleur : la lampe
+             * reprend sa couleur ou son blanc d'avant. */
+            $leaveEffect = $fx === 0 && $id === 0 && $hex === null && $cct === null && (string) $this->info('scene', '') !== '';
+
+            if ($uplighter) {
+                if (!isset(self::WLED_ZONE_ORDER[$id])) {
+                    continue;
+                }
+                $zone = self::WLED_ZONE_ORDER[$id];
+                $prefix = 'zone_' . $zone . '_';
+                $lit = (int) $this->info($prefix . 'state', 0) === 1;
+                $segOn = isset($seg['on']) ? ($seg['on'] === 't' ? !$lit : (bool) $seg['on']) : null;
+                if ($segOn === false) {
+                    $run($prefix . 'off');
+                    continue;
+                }
+                $acted = false;
+                if ($hex !== null && self::ZONES[$zone]['rgb'] && ($hex !== self::rgbToHex($this->infoRgb($prefix . 'color', '#000000')) || $leaveEffect)) {
+                    $run($prefix . 'color_set', array('color' => $hex));
+                    $acted = true;
+                } elseif ($cct !== null && abs($cct - (int) $this->info($prefix . 'colortemp', 0)) > 50) {
+                    $run($prefix . 'colortemp_set', array('slider' => $cct));
+                    $acted = true;
+                } elseif ($leaveEffect) {
+                    $run('color_set', array('color' => self::rgbToHex($this->infoRgb('color', '#ffffff'))));
+                    $acted = true;
+                }
+                if (isset($seg['bri'])) {
+                    $p = max(1, (int) round((int) $seg['bri'] * 100 / 255));
+                    if ($lit || $acted || $segOn === true) {
+                        if ($p !== (int) $this->info($prefix . 'brightness', 0)) {
+                            $run($prefix . 'brightness_set', array('slider' => $p));
+                        }
+                        $acted = true;
+                    } else {
+                        $this->publishValues(array($prefix . 'brightness' => $p));
+                    }
+                }
+                if (!$acted && $segOn === true) {
+                    $run($prefix . 'on');
+                }
+                continue;
+            }
+            if (isset($seg['on']) && ($seg['on'] === false || ($seg['on'] === 't' && (int) $this->info('state', 0) === 1))) {
+                $run('off');
+                return $done;
+            }
+            if ($hex !== null) {
+                $run('color_set', array('color' => $hex));
+            } elseif ($cct !== null) {
+                $run('colortemp_set', array('slider' => $cct));
+            } elseif ($leaveEffect) {
+                $k = (int) $this->info('colortemp', 0);
+                $run('color_set', array('color' => self::rgbToHex($this->infoRgb('color', '#ffffff'))));
+            }
+        }
+        if (isset($_body['bri'])) {
+            $run('brightness_set', array('slider' => max(1, (int) round((int) $_body['bri'] * 100 / 255))));
+        } elseif ($on === true && empty($done)) {
+            $run('on');
+        }
+        return $done;
     }
 
     /* ============================================================ ENVOI */
@@ -1045,6 +1493,7 @@ class govee extends eqLogic {
         if ($_logicalId === 'scene_set') {
             $scene = $this->findScene(isset($_options['select']) ? $_options['select'] : '');
             $this->send(self::ptReal(array_merge(array(self::fPower(true)), self::sceneFrames($scene['code'], $scene['param']))));
+            $this->setCache('scene_code', (int) $scene['code']);
             $this->publishValues(array('state' => 1, 'scene' => $scene['name'], 'music' => 0));
             return;
         }

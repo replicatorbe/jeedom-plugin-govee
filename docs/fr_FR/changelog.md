@@ -1,5 +1,20 @@
 # Changelog — plugin Govee LAN
 
+## 0.3.0 (beta)
+
+- Synchro WLED : la lampe rejoint un groupe de synchro WLED (UDP 21324).
+  Elle suit l'allumage, la luminosité et la couleur fixe des WLED du groupe,
+  et leur annonce ses propres changements. Réglage par équipement (suivre,
+  annoncer, groupes) ; port et adresses unicast (WLED d'un autre VLAN) dans
+  la configuration du plugin.
+- Suivre un WLED par son WebSocket : la lampe suit un WLED donné par son
+  adresse, en une seconde, même sur un autre VLAN (là où les broadcasts de
+  la synchro s'arrêtent). Avec « Annoncer », le WLED suit aussi la lampe.
+- Appli WLED : la lampe se présente comme un WLED (API JSON et WebSocket)
+  sur un port propre ; l'appli la pilote, avec une page de commande
+  complète (zones, effets, mode musique). Les ordres passent par les
+  commandes de l'équipement.
+
 ## 0.2.0 (beta)
 
 - Effets de l'application Govee : commande « Lancer un effet » (111 effets

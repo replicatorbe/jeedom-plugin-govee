@@ -168,6 +168,81 @@ $eqLogics = eqLogic::byType($plugin->getId());
 									<span class="help-block" style="margin:0;">{{Le profil Uplighter ajoute les commandes de chaque zone. Forcez-le pour essayer un modèle voisin (H60B3…).}}</span>
 								</div>
 							</div>
+							<legend><i class="fas fa-sync-alt"></i> {{Synchro WLED}}</legend>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{Suivre un WLED (adresse)}}</label>
+								<div class="col-sm-5">
+									<input type="text" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="wled_follow" list="list_goveeWled" placeholder="192.168.30.106">
+									<datalist id="list_goveeWled">
+										<?php
+										try {
+											foreach (govee::knownWled() as $address => $name) {
+												echo '<option value="' . htmlspecialchars($address) . '">' . htmlspecialchars($name) . '</option>';
+											}
+										} catch (Exception $e) {
+										}
+										?>
+									</datalist>
+								</div>
+								<div class="col-sm-4">
+									<span class="help-block" style="margin:0;">{{Adresse IP d'un WLED (port facultatif) : la lampe suit son allumage, sa luminosité et sa couleur fixe en une seconde, même sur un autre VLAN. Avec « Annoncer aux WLED », le WLED suivi reçoit aussi les changements de la lampe. Laisser vide pour ne suivre aucun WLED.}}</span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{Recevoir la synchro UDP}}</label>
+								<div class="col-sm-5">
+									<input type="checkbox" class="eqLogicAttr" data-l1key="configuration" data-l2key="wled_recv">
+								</div>
+								<div class="col-sm-4">
+									<span class="help-block" style="margin:0;">{{La lampe applique l'allumage, la luminosité et la couleur fixe que les WLED de ses groupes diffusent (« Send notifications » côté WLED). Même réseau que Jeedom seulement : la diffusion ne traverse pas les VLAN.}}</span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{Annoncer aux WLED}}</label>
+								<div class="col-sm-5">
+									<input type="checkbox" class="eqLogicAttr" data-l1key="configuration" data-l2key="wled_send">
+								</div>
+								<div class="col-sm-4">
+									<span class="help-block" style="margin:0;">{{Chaque changement de la lampe (Jeedom, application Govee, voix) est diffusé aux WLED de ses groupes, et envoyé au WLED suivi.}}</span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{Groupes}}</label>
+								<div class="col-sm-5">
+									<input type="text" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="wled_groups" placeholder="1">
+								</div>
+								<div class="col-sm-4">
+									<span class="help-block" style="margin:0;">{{Numéros de 1 à 8, séparés par des virgules : les cases « Groups » de la page Sync des WLED.}}</span>
+								</div>
+							</div>
+							<legend><i class="fas fa-mobile-alt"></i> {{Appli WLED}}</legend>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{Se présenter comme un WLED}}</label>
+								<div class="col-sm-5">
+									<input type="checkbox" class="eqLogicAttr" data-l1key="configuration" data-l2key="wled_api">
+								</div>
+								<div class="col-sm-4">
+									<span class="help-block" style="margin:0;">{{La lampe répond comme un WLED sur le port ci-dessous : l'appli WLED la pilote, et chaque geste exécute les commandes de cet équipement. Démon requis. Accessible sans mot de passe depuis tout le réseau local.}}</span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{Port}}</label>
+								<div class="col-sm-5">
+									<input type="number" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="wled_api_port" placeholder="8180" min="1025" max="65535">
+								</div>
+								<div class="col-sm-4">
+									<span class="help-block" style="margin:0;">
+										<?php
+										$jeedomIp = '';
+										try {
+											$jeedomIp = (string) network::getNetworkAccess('internal', 'ip');
+										} catch (Exception $e) {
+										}
+										echo '{{Un port par lampe. Dans l\'appli WLED, ajoutez l\'appareil à la main avec l\'adresse}} <code>' . htmlspecialchars($jeedomIp !== '' ? $jeedomIp : 'IP-de-Jeedom') . ':port</code>. {{La recherche automatique de l\'appli ne garde pas le port : elle ne trouvera pas la lampe.}}';
+										?>
+									</span>
+								</div>
+							</div>
 							<legend><i class="fas fa-info-circle"></i> {{Identité}}</legend>
 							<div class="form-group">
 								<label class="col-sm-3 control-label">{{Modèle}}</label>

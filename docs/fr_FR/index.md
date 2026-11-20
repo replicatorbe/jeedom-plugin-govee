@@ -120,6 +120,92 @@ Pour expérimenter : une trame par ligne (ou séparées par `;`), en
 hexadécimal, par exemple `33 30 01 01` (allume la zone haute). Une trame de
 moins de 20 octets est complétée de zéros et de sa somme de contrôle.
 
+## Suivre un WLED
+
+Le champ **Suivre le WLED** de l'équipement prend l'adresse IP d'un WLED (la
+liste propose ceux du plugin WLED). Le démon s'abonne à son WebSocket, comme
+l'appli WLED : dès que le WLED s'allume, s'éteint, change de luminosité ou
+de couleur, la lampe suit, en une seconde environ. Contrairement à la
+synchro UDP ci-dessous, cela traverse les VLAN : la connexion part de
+Jeedom.
+
+- Le segment principal du WLED fait foi ; sa luminosité propre s'ajoute à
+  la luminosité générale.
+- Pendant un effet WLED, seuls l'allumage et la luminosité sont suivis.
+- Au démarrage du démon, l'état du WLED sert de référence et n'est pas
+  appliqué : redémarrer Jeedom ne change pas la lampe.
+- Avec **Annoncer aux WLED**, le WLED suivi reçoit aussi les changements de
+  la lampe (couleur fixe, luminosité, allumage).
+- Un ESP8266 n'accepte que trois clients WebSocket : le plugin WLED en
+  prend un, la lampe un autre.
+
+## Synchro WLED
+
+La lampe peut entrer dans un groupe de synchro WLED, comme un WLED de plus :
+elle reçoit et envoie le paquet que les WLED s'échangent sur le port UDP
+21324 (page **Config → Sync Interfaces** d'un WLED). Deux cases sur
+l'équipement :
+
+- **Suivre les WLED** : un WLED du groupe s'allume, s'éteint, change de
+  luminosité ou de couleur, et la lampe suit. Quand le WLED joue un effet,
+  seuls l'allumage et la luminosité sont suivis : sa couleur n'est alors
+  qu'un ingrédient de l'effet. Un blanc pur (canal W) devient une
+  température de blanc, bornée à la plage de la lampe.
+- **Annoncer aux WLED** : chaque changement de la lampe, qu'il vienne de
+  Jeedom, de l'application Govee ou de la voix, est annoncé. Les WLED
+  du groupe qui ont la réception activée le suivent. Le relevé d'état
+  impose son rythme : un changement fait hors de Jeedom part au plus tard
+  après le délai de relevé.
+
+**Groupes** : les numéros 1 à 8 des cases « Groups » de la page Sync des
+WLED, séparés par des virgules (1 par défaut). Côté WLED, cochez « Send
+notifications » pour que la lampe suive le WLED, et les cases de réception
+(« Brightness », « Color ») pour que le WLED suive la lampe.
+
+Le démon n'ouvre le port qu'à partir du moment où une lampe s'en sert.
+Redémarrer le démon n'annonce rien aux WLED, et un ordre venu d'un WLED ne
+lui est pas renvoyé en écho.
+
+**Autre réseau, autre VLAN.** Les WLED annoncent leurs changements en
+broadcast, qui ne traverse pas les routeurs : pour que la lampe suive des
+WLED d'un autre VLAN, il faut que Jeedom ait une patte dans ce VLAN, ou que
+le routeur relaie le port UDP 21324 (relais de broadcast). Dans l'autre
+sens, la configuration du plugin, rubrique **Annoncer aussi à**, accepte
+l'adresse de chaque WLED : ils reçoivent l'annonce directement.
+
+## Appli WLED
+
+Avec **Se présenter comme un WLED**, la lampe répond comme un WLED sur le
+port choisi (8180 par défaut, un port différent par lampe) de la machine
+Jeedom. Dans l'appli WLED, ajoutez l'appareil à la main avec l'adresse
+`IP-de-Jeedom:8180` : la recherche automatique de l'appli ne retient pas le
+port, elle ne trouve pas la lampe.
+
+- **Liste des appareils** : allumage et luminosité, en direct.
+- **Écran de l'appareil** : une page de commande propre à la lampe
+  (luminosité, couleur, blanc, effets Govee, et pour l'Uplighter chaque zone
+  et le mode musique). Ce n'est pas l'interface de WLED.
+- Chaque geste exécute la commande correspondante de l'équipement, comme
+  depuis Jeedom (actions avant et après, timeline) : Jeedom reste la source
+  de vérité, ses historiques et scénarios voient tout, et un changement fait
+  ailleurs (Jeedom, application Govee, voix) apparaît dans l'appli.
+- Un curseur glissé dans l'appli envoie une rafale d'ordres : un seul part
+  à la fois chez Jeedom, et seule la dernière valeur compte.
+- Uplighter : deux zones au plus restent allumées. Allumer un troisième
+  segment éteint la zone allumée depuis le plus longtemps ; une luminosité
+  de segment envoyée pour une zone éteinte est retenue sans l'allumer.
+- Pour les autres clients WLED, l'API JSON est servie aussi (`/json`,
+  `/json/state`, `/json/si`, `/json/eff`…) : une lampe simple est un seul
+  segment, un Uplighter trois (zone haute, anneau, zone basse), et les effets
+  sont ceux de l'application Govee.
+
+Comme un vrai WLED, cette API répond sans mot de passe à tout le réseau
+local : ne l'activez que sur un réseau de confiance. Une page web d'un autre
+site ne peut pas s'en servir (contrôle de l'origine), les connexions sont
+limitées (32, dont 12 par lampe) et les trames brutes ne sont pas
+accessibles. Home Assistant n'est pas
+pris en charge : il impose le port 80, celui de Jeedom.
+
 ## Démon
 
 Le démon est indispensable au retour d'état : la lampe répond toujours sur
@@ -134,6 +220,11 @@ fois par minute.
   ou adresse IP saisie ? Ports UDP 4001–4003 ouverts entre les réseaux ?
 - **Le démon ne démarre pas** : son journal `goveed` dit si le port 4002 ou
   le port de contrôle est déjà pris.
+- **L'appli WLED affiche la lampe hors ligne** : démon arrêté, port pris
+  (journal `goveed`), ou adresse saisie sans le port.
+- **La synchro WLED ne fait rien** : le journal `goveed`, en niveau info,
+  dit si le port 21324 est pris, et trace chaque paquet appliqué ou annoncé.
+  WLED sur un autre VLAN : voir « Autre réseau, autre VLAN ».
 - **Une zone reste éteinte après un réglage de blanc** : les valeurs hors de
   2700–6500 K éteignent une zone du H60B0 ; le plugin les borne.
 

@@ -27,6 +27,26 @@ if (!isConnect('admin')) {
 				<span class="help-block" style="margin:0;">{{Port TCP, sur 127.0.0.1 uniquement, par lequel le plugin passe ses ordres au démon. À changer seulement s'il est déjà pris.}}</span>
 			</div>
 		</div>
+		<legend><i class="fas fa-sync-alt"></i> {{Synchro WLED}}</legend>
+		<div class="form-group">
+			<label class="col-md-4 control-label">{{Port UDP de synchro}}</label>
+			<div class="col-md-2">
+				<input type="number" class="configKey form-control" data-l1key="wled_port" placeholder="21324" min="1025" max="65535">
+			</div>
+			<div class="col-md-5">
+				<span class="help-block" style="margin:0;">{{Celui des WLED (« UDP Port » de leur page Sync), 21324 par défaut. Ouvert seulement si une lampe a la synchro activée. Redémarrez le démon après modification.}}</span>
+			</div>
+		</div>
+		<div class="form-group">
+			<label class="col-md-4 control-label">{{Annoncer aussi à}}</label>
+			<div class="col-md-4">
+				<input type="text" class="configKey form-control" data-l1key="wled_targets" placeholder="192.168.30.255, 192.168.1.42">
+			</div>
+			<div class="col-md-3">
+				<span class="help-block" style="margin:0;">{{Les annonces partent en broadcast sur le réseau de Jeedom. Pour des WLED sur un autre VLAN, donnez leur adresse, ou le broadcast de leur réseau si le routeur le relaie. Redémarrez le démon après modification.}}</span>
+			</div>
+		</div>
+		<legend><i class="fas fa-network-wired"></i> {{Réseau}}</legend>
 		<div class="form-group">
 			<label class="col-md-4 control-label">{{Ports réseau des lampes}}</label>
 			<div class="col-md-7">

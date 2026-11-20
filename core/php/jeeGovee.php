@@ -19,7 +19,10 @@
 /*
  * Point d'entrée du démon, protégé par la clé API du plugin :
  *   GET  ?apikey=…&action=devices                  → lampes à suivre, en JSON
- *   POST ?apikey=…&action=push {"states":{ID:{…}}} → états relevés (devStatus)
+ *   POST ?apikey=…&action=push {"states":{ID:{…}}} → états relevés (devStatus) ;
+ *        la réponse donne l'état WLED des lampes émulées concernées
+ *   POST ?apikey=…&action=wled&eq=ID {ordre WLED}  → ordre de l'appli WLED,
+ *        exécuté ; la réponse donne le nouvel état WLED de la lampe
  */
 
 require_once __DIR__ . '/../../../../core/php/core.inc.php';
@@ -46,6 +49,7 @@ if (init('action') == 'push') {
     cache::set('govee::daemon_seen', time());
     $payload = json_decode(file_get_contents('php://input'), true);
     $states = (is_array($payload) && isset($payload['states']) && is_array($payload['states'])) ? $payload['states'] : array();
+    $wled = array();
     foreach ($states as $id => $state) {
         $eqLogic = eqLogic::byId((int) $id);
         if (!is_object($eqLogic) || $eqLogic->getEqType_name() != 'govee' || !$eqLogic->getIsEnable() || !is_array($state)) {
@@ -56,8 +60,44 @@ if (init('action') == 'push') {
         } catch (Throwable $e) {
             log::add('govee', 'error', $eqLogic->getHumanName() . ' : ' . $e->getMessage());
         }
+        try {
+            if ($eqLogic->wledApiEnabled()) {
+                $wled[(int) $id] = $eqLogic->wledJson();
+            }
+        } catch (Throwable $e) {
+            log::add('govee', 'error', $eqLogic->getHumanName() . ' : ' . $e->getMessage());
+        }
     }
-    echo 'OK';
+    header('Content-Type: application/json');
+    echo json_encode(array('ok' => true, 'wled' => (object) $wled));
+    die();
+}
+
+if (init('action') == 'wled') {
+    cache::set('govee::daemon_seen', time());
+    $eqLogic = eqLogic::byId((int) init('eq'));
+    if (!is_object($eqLogic) || $eqLogic->getEqType_name() != 'govee' || !$eqLogic->getIsEnable() || !$eqLogic->wledApiEnabled()) {
+        http_response_code(404);
+        echo 'Unknown device';
+        die();
+    }
+    $error = '';
+    try {
+        $done = $eqLogic->wledApply(json_decode(file_get_contents('php://input'), true));
+        log::add('govee', 'debug', $eqLogic->getHumanName() . ' : ordre WLED -> ' . (empty($done) ? 'rien' : implode(', ', $done)));
+    } catch (Throwable $e) {
+        $error = $e->getMessage();
+        log::add('govee', 'warning', $eqLogic->getHumanName() . ' : ordre WLED refusé (' . $error . ')');
+    }
+    try {
+        $wled = $eqLogic->wledJson();
+    } catch (Throwable $e) {
+        $wled = null;
+        $error = $error !== '' ? $error : $e->getMessage();
+        log::add('govee', 'error', $eqLogic->getHumanName() . ' : état WLED illisible (' . $e->getMessage() . ')');
+    }
+    header('Content-Type: application/json');
+    echo json_encode(array('ok' => $error === '', 'error' => $error, 'wled' => $wled));
     die();
 }
 

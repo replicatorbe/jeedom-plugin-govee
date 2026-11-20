@@ -56,7 +56,12 @@ try {
             if (!filter_var($found['ip'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
                 continue;
             }
-            $eqLogic = govee::createFromScan($found);
+            try {
+                $eqLogic = govee::createFromScan($found);
+            } catch (Throwable $e) {
+                log::add('govee', 'warning', $found['ip'] . ' : ' . $e->getMessage());
+                continue;
+            }
             /* Modèle sans catalogue livré : le télécharger une fois. */
             if ($found['sku'] !== '' && empty(govee::sceneCatalogue($found['sku']))) {
                 try {

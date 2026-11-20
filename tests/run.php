@@ -22,6 +22,7 @@ file_put_contents($copy, str_replace('__DIR__', var_export(realpath(__DIR__ . '/
     file_get_contents(__DIR__ . '/../core/class/govee.class.php'))));
 register_shutdown_function(function () use ($copy) { @unlink($copy); });
 require_once $copy;
+require_once __DIR__ . '/../resources/goveed/ws.php';
 
 $passed = 0;
 $failed = 0;
@@ -97,6 +98,142 @@ check('blanc 2700 K', govee::statusValues(json_decode('{"onOff":1,"brightness":1
 check('rouge', govee::statusValues(json_decode('{"onOff":1,"brightness":40,"color":{"r":255,"g":0,"b":0},"colorTemInKelvin":0}', true)),
     array('state' => 1, 'brightness' => 40, 'color' => '#ff0000'));
 check('éteinte', govee::statusValues(array('onOff' => 0))['state'], 0);
+
+echo "Synchro WLED\n";
+/* Paquet d'un WLED 0.15 (version 12) : rouge, luminosité 128, groupes 1 et 3. */
+$in = array_fill(0, 41, 0);
+$in[1] = 1; $in[2] = 128; $in[3] = 255; $in[11] = 12; $in[36] = 0b101; $in[37] = 255;
+$p = wledParse(pack('C*', ...$in));
+check('lecture : groupes', $p['groups'], 5);
+check('lecture : couleur', $p['rgb'], array(255, 0, 0));
+check('rouge à 50 %', wledWanted($p, 2700, 6500), array('on' => true, 'brightness' => 50, 'color' => array(255, 0, 0)));
+$in[8] = 9;
+check('effet : couleur non suivie', wledWanted(wledParse(pack('C*', ...$in)), 2700, 6500), array('on' => true, 'brightness' => 50));
+$in[8] = 0; $in[2] = 0;
+check('luminosité 0 : éteindre', wledWanted(wledParse(pack('C*', ...$in)), 2700, 6500), array('on' => false));
+$in[2] = 255; $in[3] = 0; $in[10] = 255; $in[37] = 0; $in[38] = 255;
+check('blanc pur, CCT froid -> borne haute', wledWanted(wledParse(pack('C*', ...$in)), 2700, 6500)['kelvin'], 6500);
+$in[37] = 0x0f; $in[38] = 0xa0;
+check('blanc pur, 4000 K', wledWanted(wledParse(pack('C*', ...$in)), 2700, 6500)['kelvin'], 4000);
+check('paquet custom (callMode > 199) ignoré', wledParse(pack('C*', 0, 200, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)), null);
+check('realtime (WARLS) ignoré', wledParse(pack('C*', 1, 2, 0, 255, 0, 0, 1, 2, 3, 4, 5, 6)), null);
+check('ancien paquet (version 8) : groupe 1', wledParse(pack('C*', ...array_slice(array_replace($in, array(11 => 8)), 0, 24)))['groups'], 1);
+
+$out = wledPacket(array('on' => true, 'brightness' => 100, 'kelvin' => 4000), 2);
+$ob = array_values(unpack('C*', $out));
+check('envoi : 41 octets, version 10', array(strlen($out), $ob[11]), array(41, 10));
+check('envoi : kelvin en octets 37-38', ($ob[37] << 8) | $ob[38], 4000);
+check('envoi : RVB du blanc', array($ob[3], $ob[4], $ob[5]), govee::kelvinToRgb(4000));
+check('aller-retour', wledWanted(wledParse(wledPacket(array('on' => true, 'brightness' => 40, 'color' => array(0, 128, 255)), 1)), 2000, 9000),
+    array('on' => true, 'brightness' => 40, 'color' => array(0, 128, 255)));
+check('éteinte : luminosité 0', ord(wledPacket(array('on' => false), 1)[2]), 0);
+check('un blanc annoncé reste un blanc (pas son RVB approché)',
+    wledWanted(wledParse(wledPacket(array('on' => true, 'brightness' => 60, 'kelvin' => 3000), 1)), 2700, 6500),
+    array('on' => true, 'brightness' => 60, 'kelvin' => 3000));
+
+$status = wledFromStatus(json_decode('{"onOff":1,"brightness":40,"color":{"r":255,"g":0,"b":0},"colorTemInKelvin":0}', true));
+check('rien à envoyer si déjà là', wledMessages(array('on' => true, 'brightness' => 40, 'color' => array(255, 0, 0)), $status), array());
+check('seule la luminosité change', count(wledMessages(array('on' => true, 'brightness' => 80, 'color' => array(255, 0, 0)), $status)), 1);
+check('éteinte -> allumer + couleur + luminosité', count(wledMessages(array('on' => true, 'brightness' => 80, 'color' => array(1, 2, 3)), array('on' => false))), 3);
+check('état inconnu, éteindre', wledMessages(array('on' => false), null), array(govee::msg('turn', array('value' => 0))));
+check('groupes « 1, 3 »', wledGroupMask('1, 3'), 5);
+check('groupes vides -> 1', wledGroupMask(''), 1);
+check('groupe 9 ignoré', wledGroupMask('9 2'), 2);
+
+echo "Suivi d'un WLED (WebSocket)\n";
+/* Extrait d'un vrai état poussé par le WLED de développement (16.0.0). */
+$json = json_decode('{"on":true,"bri":128,"mainseg":0,"seg":[{"id":0,"on":true,"bri":255,"col":[[0,0,255],[0,0,0],[0,0,0]],"fx":0,"cct":127}]}', true);
+check('bleu à 50 %', wledWanted(wledFromJson($json), 2700, 6500), array('on' => true, 'brightness' => 50, 'color' => array(0, 0, 255)));
+$json['seg'][0]['bri'] = 128;
+check('luminosité du segment comptée', wledWanted(wledFromJson($json), 2700, 6500)['brightness'], 25);
+$json['seg'][0]['on'] = false;
+check('segment éteint : lampe éteinte', wledWanted(wledFromJson($json), 2700, 6500), array('on' => false));
+check('segment principal choisi par mainseg', wledFromJson(array('on' => true, 'bri' => 255, 'mainseg' => 1,
+    'seg' => array(array('id' => 0, 'col' => array(array(1, 1, 1))), array('id' => 1, 'col' => array(array(9, 9, 9))))))['rgb'], array(9, 9, 9));
+check('état illisible', wledFromJson(array('seg' => array())), null);
+check('accept (exemple de la RFC 6455)', wsAccept('dGhlIHNhbXBsZSBub25jZQ=='), 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=');
+$long = str_repeat('x', 70000);
+$buf = wsFrame(1, 'bonjour', true) . wsFrame(9, 'p', false) . wsFrame(1, $long, false);
+$frag = null;
+check('trames masquées, ping, 64 bits', wsParse($buf, $frag), array(array('text', 'bonjour'), array('ping', 'p'), array('text', $long)));
+$whole = wsFrame(1, 'coupé', false);
+$buf = substr($whole, 0, 4);
+check('trame incomplète : attente', wsParse($buf, $frag), array());
+$buf .= substr($whole, 4);
+check('trame complétée', wsParse($buf, $frag), array(array('text', 'coupé')));
+
+echo "Ordres de l'appli WLED (lampe simulée)\n";
+/* Lampe simulée : ses commandes info rendent des valeurs fixées, ses
+ * commandes action notent leur appel au lieu d'envoyer quoi que ce soit. */
+class goveeCmdStub {
+    public $value; public $owner; public $id;
+    public function execCmd($_options = null) {
+        if ($this->owner !== null) { $this->owner->runs[] = array($this->id, $_options); }
+        return $this->value;
+    }
+}
+class goveeStub extends govee {
+    public $values = array(); public $runs = array(); public $actions = array();
+    public function getCmd($_type = null, $_logicalId = null, $_visible = null, $_multiple = false) {
+        $c = new goveeCmdStub();
+        if ($_type === 'action') {
+            if (!in_array($_logicalId, $this->actions, true)) { return null; }
+            $c->owner = $this; $c->id = $_logicalId;
+            return $c;
+        }
+        if (!array_key_exists($_logicalId, $this->values)) { return null; }
+        $c->value = $this->values[$_logicalId];
+        return $c;
+    }
+}
+function goveeStub($_sku, $_values) {
+    $e = new goveeStub();
+    $e->setConfiguration('sku', $_sku);
+    $e->values = $_values;
+    $e->actions = array('on', 'off', 'brightness_set', 'color_set', 'colortemp_set', 'scene_set', 'music_on', 'refresh', 'frames');
+    foreach (array('top', 'side', 'bottom') as $z) {
+        foreach (array('on', 'off', 'brightness_set', 'color_set', 'colortemp_set') as $a) { $e->actions[] = 'zone_' . $z . '_' . $a; }
+    }
+    return $e;
+}
+$lamp = goveeStub('H6008', array('state' => 1, 'brightness' => 50, 'color' => '#ff0000', 'colortemp' => 4000, 'scene' => ''));
+$lamp->wledApply(array('bri' => 128));
+check('bri 128 -> luminosité 50 %', $lamp->runs, array(array('brightness_set', array('slider' => 50))));
+$lamp->runs = array(); $lamp->wledApply(array('on' => false, 'bri' => 200));
+check('on false : éteindre seulement', $lamp->runs, array(array('off', array())));
+$lamp->runs = array(); $lamp->wledApply(array('on' => 't'));
+check('bascule d\'une lampe allumée', $lamp->runs, array(array('off', array())));
+$lamp->runs = array(); $lamp->wledApply(array('seg' => array('col' => array(array(0, 0, 255)))));
+check('segment en objet, sans numéro', $lamp->runs, array(array('color_set', array('color' => '#0000ff'))));
+$lamp->runs = array(); $lamp->wledApply(array('seg' => array(array('id' => 0, 'cct' => 255))));
+check('CCT 255 -> blanc le plus froid', $lamp->runs, array(array('colortemp_set', array('slider' => 9000))));
+$threw = false;
+$lamp->runs = array();
+try { $lamp->wledApply(array('gv' => array('cmd' => 'frames', 'options' => array('message' => '33 01 00')))); } catch (Exception $e) { $threw = true; }
+check('gv : trames brutes refusées, rien exécuté', array($threw, $lamp->runs), array(true, array()));
+$lamp->wledApply(array('gv' => array('cmd' => 'color_set', 'options' => array('color' => '#00ff00', 'message' => 'x'))));
+check('gv : options filtrées', $lamp->runs, array(array('color_set', array('color' => '#00ff00'))));
+
+$up = goveeStub('H60B0', array('state' => 1, 'brightness' => 100, 'color' => '#ffffff', 'colortemp' => 4000, 'scene' => 'Ocean',
+    'zone_top_state' => 1, 'zone_top_color' => '#ff0000', 'zone_top_brightness' => 80,
+    'zone_side_state' => 0, 'zone_side_color' => '#00ff00', 'zone_side_brightness' => 60, 'zone_bottom_state' => 0));
+$scenes = $up->wledScenes();
+$names = array_column($scenes, 'name');
+check('noms d\'effets uniques', count($names), count(array_unique($names)));
+$i = array_search('Meditation (Soothing)', $names, true);
+$up->runs = array(); $up->wledApply(array('seg' => array(array('id' => 0, 'fx' => $i + 1))));
+check('doublon « Meditation » : lancé par son code', $up->runs, array(array('scene_set', array('select' => (string) $scenes[$i]['code']))));
+$up->runs = array(); $up->wledApply(array('seg' => array(array('id' => 0, 'fx' => 0))));
+check('« Solid » pendant un effet : couleur d\'avant', $up->runs, array(array('color_set', array('color' => '#ffffff'))));
+$up->runs = array(); $up->wledApply(array('seg' => array(array('id' => 1, 'on' => true))));
+check('allumer l\'anneau (segment 1)', $up->runs, array(array('zone_side_on', array())));
+$up->runs = array(); $up->wledApply(array('seg' => array(array('id' => 0, 'col' => array(array(255, 0, 0)), 'bri' => 204))));
+check('zone haute : même couleur, même luminosité -> rien', $up->runs, array());
+$up->runs = array(); $up->wledApply(array('seg' => array(array('id' => 2, 'on' => false))));
+check('éteindre la zone basse', $up->runs, array(array('zone_bottom_off', array())));
+$state = $up->wledState();
+check('état : trois segments, seul le 0 sélectionné', array(count($state['seg']), array_column($state['seg'], 'sel')), array(3, array(true, false, false)));
+check('état : CCT relatif 0-255', $state['seg'][0]['cct'], (int) round((4000 - 2700) * 255 / (6500 - 2700)));
 
 echo "Couleurs\n";
 check('#abc', govee::hexToRgb('#abc'), array(170, 187, 204));
