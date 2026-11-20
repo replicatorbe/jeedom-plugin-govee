@@ -160,9 +160,15 @@ démon reçoit l'aperçu du WLED (celui de sa vue « Peek ») et le transmet à 
 lampe par le flux temps réel de Govee, celui de Govee Desktop.
 
 - **Couleur moyenne** : toute la lampe prend la couleur moyenne du WLED.
-- **Répartie sur la lampe** : la bande du WLED est découpée sur les
-  segments du flux, du bas vers le haut (H60B0 : 7 segments, relevés sur la
-  lampe). Les autres modèles prennent la couleur moyenne.
+- **Répartie sur la lampe** : sur le H60B0, la bande du WLED tourne autour
+  de l'anneau (6 portions) et le haut prend l'ambiance de toute la bande,
+  comme un plafonnier. L'éclairage du bas n'est pas pilotable par le flux
+  temps réel : il garde son réglage. **Inverser le sens de rotation** si
+  l'effet tourne à l'envers. Les autres modèles prennent la couleur
+  moyenne.
+- Les couleurs sont mélangées comme l'œil mélange des LED voisines (en
+  lumière, pondérées par leur éclat) : un effet multicolore reste vif, et
+  quelques étincelles sur fond noir restent visibles.
 - La luminosité reste celle du WLED, suivie comme d'habitude ; WLED éteint,
   la lampe s'éteint et sort du flux. À l'arrêt de la copie (case décochée,
   WLED injoignable, démon arrêté), la lampe retrouve son état d'avant.

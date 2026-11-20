@@ -55,11 +55,14 @@ class govee extends eqLogic {
     const WLED_API_PORT = 8180;
     /* Ports qu'une lampe émulée ne peut pas prendre. */
     const WLED_API_RESERVED = array(80, 443, 4001, 4002, 4003, 21324);
-    /* Segments acceptés par le flux temps réel (« razer ») : au-delà, la
-     * lampe rejette la trame et s'éteint. Relevé sur la lampe (H60B0 : 7,
-     * du bas vers le haut ; 8 rejetés). Un modèle absent ne copie qu'en
-     * couleur moyenne. */
-    const RAZER_SEGMENTS = array('H60B0' => 7);
+    /* Disposition du flux temps réel (« razer ») par modèle : 'strip'
+     * segments rejouent la bande du WLED en portions, puis 'ambient'
+     * segments prennent son ambiance. Au-delà du total, la lampe rejette la
+     * trame et s'éteint. H60B0, relevé sur la lampe : 7 au plus (8
+     * rejetés), les 6 premiers font le tour de l'anneau, le 7e est le haut ;
+     * l'éclairage du bas n'est pas pilotable ainsi. Un modèle absent ne
+     * copie qu'en couleur moyenne. */
+    const RAZER_LAYOUT = array('H60B0' => array('strip' => 6, 'ambient' => 1));
     /* Choix de la copie en direct : valeur de configuration => libellé. */
     const MIRROR_MODES = array('off' => 'Non', 'average' => 'Couleur moyenne', 'spread' => 'Répartie');
     /* Zones d'un Uplighter, dans l'ordre des segments WLED. */
@@ -426,10 +429,10 @@ class govee extends eqLogic {
         $this->publishValues($values);
     }
 
-    /* Segments du flux temps réel pour ce modèle, 0 si inconnu. */
-    public function razerSegments() {
+    /* Disposition du flux temps réel pour ce modèle, null si inconnue. */
+    public function razerLayout() {
         $sku = strtoupper((string) $this->getConfiguration('sku', ''));
-        return isset(self::RAZER_SEGMENTS[$sku]) ? self::RAZER_SEGMENTS[$sku] : 0;
+        return isset(self::RAZER_LAYOUT[$sku]) ? self::RAZER_LAYOUT[$sku] : null;
     }
 
     /* Réglages de synchro WLED d'une lampe, pour le démon. */
@@ -441,7 +444,8 @@ class govee extends eqLogic {
             'k'      => $this->kelvinRange(),
             'follow' => $this->wledFollowActive() ? self::wledAddress($this->getConfiguration('wled_follow', '')) : '',
             'mirror' => in_array($this->getConfiguration('wled_mirror', ''), array('average', 'spread'), true) ? $this->getConfiguration('wled_mirror') : '',
-            'segs'   => $this->razerSegments(),
+            'layout' => $this->razerLayout(),
+            'reverse' => (int) $this->getConfiguration('wled_mirror_reverse', 0) === 1,
         );
     }
 

@@ -241,13 +241,24 @@ check('activation (LedFx)', base64_decode(json_decode(RAZER_ON, true)['msg']['da
 check('trame une couleur', wledRazerFrame(array(array(255, 0, 0))), '{"msg":{"cmd":"razer","data":{"pt":"uwD6sAEB/wAADg=="}}}');
 $frame = base64_decode(json_decode(wledRazerFrame(array_fill(0, 7, array(1, 2, 3))), true)['msg']['data']['pt']);
 check('7 segments : par segment, somme XOR nulle', array(ord($frame[4]), ord($frame[5]), array_reduce(str_split($frame), function ($x, $c) { return $x ^ ord($c); }, 0)), array(0, 7, 0));
-/* Aperçu de 6 LED : 3 rouges puis 3 bleues. */
-$live = 'L' . chr(1) . str_repeat(chr(255) . chr(0) . chr(0), 3) . str_repeat(chr(0) . chr(0) . chr(255), 3);
-check('aperçu, moyenne', wledLiveColors($live, 1), array(array(128, 0, 128)));
-check('aperçu, 2 segments', wledLiveColors($live, 2), array(array(255, 0, 0), array(0, 0, 255)));
-check('aperçu, plus de segments que de LED', count(wledLiveColors($live, 7)), 6);
-check('aperçu matrice (version 2)', wledLiveColors('L' . chr(2) . chr(1) . chr(1) . chr(9) . chr(8) . chr(7), 1), array(array(9, 8, 7)));
-check('aperçu illisible', wledLiveColors('{"state":1}', 3), null);
+/* Aperçus fabriqués : une LED = un triplet RVB. */
+$live = function ($_pix) { $s = 'L' . chr(1); foreach ($_pix as $p) { $s .= chr($p[0]) . chr($p[1]) . chr($p[2]); } return $s; };
+$one = array('strip' => 1, 'ambient' => 0);
+check('couleur unie conservée', wledLiveFrame($live(array_fill(0, 12, array(0, 0, 200))), $one, false), array(array(0, 0, 200)));
+check('rouge + vert : jaune vif, pas kaki', wledLiveFrame($live(array(array(255, 0, 0), array(0, 255, 0))), $one, false), array(array(255, 255, 0)));
+$sparks = array_fill(0, 30, array(0, 0, 0)); $sparks[3] = array(255, 120, 0); $sparks[17] = array(255, 200, 40);
+$c = wledLiveFrame($live($sparks), $one, false)[0];
+check('étincelles sur fond noir : segment visible', $c[0] > 150, true);
+check('tout noir : noir', wledLiveFrame($live(array_fill(0, 6, array(0, 0, 0))), $one, false), array(array(0, 0, 0)));
+/* H60B0 : 6 portions d'anneau puis le haut (ambiance de toute la bande). */
+$bands = array(); foreach (array(array(255,0,0), array(0,255,0), array(0,0,255), array(255,255,0), array(0,255,255), array(255,0,255)) as $col) { for ($i = 0; $i < 10; $i++) { $bands[] = $col; } }
+$frame = wledLiveFrame($live($bands), array('strip' => 6, 'ambient' => 1), false);
+check('anneau : 6 portions dans l\'ordre de la bande', array_slice($frame, 0, 6), array(array(255,0,0), array(0,255,0), array(0,0,255), array(255,255,0), array(0,255,255), array(255,0,255)));
+check('haut : ambiance, 7 couleurs en tout', count($frame), 7);
+$rev = wledLiveFrame($live($bands), array('strip' => 6, 'ambient' => 1), true);
+check('sens inversé : anneau à rebours, haut inchangé', array($rev[0], $rev[5], $rev[6]), array(array(255,0,255), array(255,0,0), $frame[6]));
+check('matrice (version 2)', wledLiveFrame('L' . chr(2) . chr(1) . chr(1) . chr(9) . chr(8) . chr(7), $one, false), array(array(9, 8, 7)));
+check('aperçu illisible', wledLiveFrame('{"state":1}', $one, false), null);
 
 echo "Couleurs\n";
 check('#abc', govee::hexToRgb('#abc'), array(170, 187, 204));

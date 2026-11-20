@@ -316,42 +316,14 @@ function wledFromJson($_state) {
  * ou 0 (une couleur par segment), le nombre de couleurs, les couleurs, et le
  * XOR de tout ce qui précède, en base64 dans {"cmd":"razer","data":{"pt"}}.
  * Une trame qui annonce plus de segments que la lampe n'en accepte est
- * rejetée : la lampe s'éteint jusqu'à la trame valide suivante (7 au plus
- * sur le H60B0, relevé sur la lampe, du bas vers le haut).
+ * rejetée : la lampe s'éteint jusqu'à la trame valide suivante. H60B0,
+ * relevé sur la lampe : 7 au plus, les 6 premiers en portions de l'anneau,
+ * le 7e le haut ; l'éclairage du bas n'est pas pilotable ainsi.
  * À la sortie du flux, la lampe garde sa dernière image : il faut lui
  * redonner son état, une seconde plus tard.
  */
 const RAZER_ON = '{"msg":{"cmd":"razer","data":{"pt":"uwABsQEK"}}}';
 const RAZER_OFF = '{"msg":{"cmd":"razer","data":{"pt":"uwABsQAL"}}}';
-
-/* Couleurs d'une image d'aperçu, ramenées à $_segments moyennes (la bande
- * coupée en parts égales, dans l'ordre). Rend null si l'image est illisible. */
-function wledLiveColors($_data, $_segments) {
-    if (!is_string($_data) || strlen($_data) < 5 || $_data[0] !== 'L') {
-        return null;
-    }
-    $offset = ord($_data[1]) === 2 ? 4 : 2;
-    $count = intdiv(strlen($_data) - $offset, 3);
-    if ($count < 1) {
-        return null;
-    }
-    $px = array_values(unpack('C*', substr($_data, $offset, $count * 3)));
-    $segments = max(1, min((int) $_segments, $count));
-    $colors = array();
-    for ($s = 0; $s < $segments; $s++) {
-        $from = intdiv($s * $count, $segments);
-        $to = max($from + 1, intdiv(($s + 1) * $count, $segments));
-        $sum = array(0, 0, 0);
-        for ($i = $from; $i < $to; $i++) {
-            $sum[0] += $px[3 * $i];
-            $sum[1] += $px[3 * $i + 1];
-            $sum[2] += $px[3 * $i + 2];
-        }
-        $n = $to - $from;
-        $colors[] = array((int) round($sum[0] / $n), (int) round($sum[1] / $n), (int) round($sum[2] / $n));
-    }
-    return $colors;
-}
 
 /* Trame razer : une couleur étirée sur toute la lampe, ou une par segment. */
 function wledRazerFrame($_colors) {
@@ -367,4 +339,86 @@ function wledRazerFrame($_colors) {
     }
     $bytes[] = $x;
     return '{"msg":{"cmd":"razer","data":{"pt":"' . base64_encode(pack('C*', ...$bytes)) . '"}}}';
+}
+
+/*
+ * Rendu naturel d'une portion de bande sur un segment de la lampe.
+ *
+ * Une moyenne simple ternit tout : rouge et vert donnent un brun sombre,
+ * quelques étincelles sur fond noir donnent un segment éteint. Ici :
+ *   - les valeurs sont ramenées en lumière linéaire (gamma 2,2) avant d'être
+ *     mélangées, comme l'œil additionne la lumière de LED voisines ;
+ *   - chaque LED pèse selon sa luminosité : les LED éteintes ne grisent pas
+ *     la teinte des LED allumées ;
+ *   - la luminosité du segment est remontée de la moyenne vers celle de la
+ *     LED la plus vive ($_vivid entre 0 et 1) : un éclat reste un éclat.
+ */
+function wledChunkColor($_px, $_from, $_to, $_vivid) {
+    static $lin = null;
+    if ($lin === null) {
+        for ($v = 0; $v < 256; $v++) {
+            $lin[$v] = pow($v / 255, 2.2);
+        }
+    }
+    $acc = array(0.0, 0.0, 0.0);
+    $weight = 0.0;
+    $sumL = 0.0;
+    $maxL = 0.0;
+    for ($i = $_from; $i < $_to; $i++) {
+        $r = $lin[$_px[3 * $i]];
+        $g = $lin[$_px[3 * $i + 1]];
+        $b = $lin[$_px[3 * $i + 2]];
+        $l = max($r, $g, $b);
+        $acc[0] += $r * $l;
+        $acc[1] += $g * $l;
+        $acc[2] += $b * $l;
+        $weight += $l;
+        $sumL += $l;
+        $maxL = max($maxL, $l);
+    }
+    if ($weight <= 0) {
+        return array(0, 0, 0);
+    }
+    $avg = array($acc[0] / $weight, $acc[1] / $weight, $acc[2] / $weight);
+    $peak = max($avg);
+    $meanL = $sumL / max(1, $_to - $_from);
+    $target = $meanL + ($maxL - $meanL) * $_vivid;
+    $scale = $peak > 0 ? $target / $peak : 0;
+    return array_map(function ($c) use ($scale) {
+        return (int) round(255 * pow(max(0, min(1, $c * $scale)), 1 / 2.2));
+    }, $avg);
+}
+
+/*
+ * Image d'aperçu rendue sur la disposition de la lampe : $_layout =
+ * array('strip' => n, 'ambient' => m) : n segments rejouent la bande en
+ * portions (dans l'ordre, ou à rebours avec $_reverse), puis m segments
+ * prennent l'ambiance de toute la bande. H60B0 : 6 segments d'anneau, puis
+ * le haut. Rend null si l'image est illisible.
+ */
+function wledLiveFrame($_data, $_layout, $_reverse) {
+    if (!is_string($_data) || strlen($_data) < 5 || $_data[0] !== 'L') {
+        return null;
+    }
+    $offset = ord($_data[1]) === 2 ? 4 : 2;
+    $count = intdiv(strlen($_data) - $offset, 3);
+    if ($count < 1) {
+        return null;
+    }
+    $px = array_values(unpack('C*', substr($_data, $offset, $count * 3)));
+    $strip = max(1, min((int) $_layout['strip'], $count));
+    $colors = array();
+    for ($s = 0; $s < $strip; $s++) {
+        $from = intdiv($s * $count, $strip);
+        $to = max($from + 1, intdiv(($s + 1) * $count, $strip));
+        $colors[] = wledChunkColor($px, $from, $to, 0.6);
+    }
+    if ($_reverse) {
+        $colors = array_reverse($colors);
+    }
+    $ambient = wledChunkColor($px, 0, $count, 0.3);
+    for ($a = 0; $a < (int) $_layout['ambient']; $a++) {
+        $colors[] = $ambient;
+    }
+    return $colors;
 }

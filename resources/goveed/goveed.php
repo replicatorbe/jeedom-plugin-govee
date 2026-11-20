@@ -461,10 +461,14 @@ function gvWledConfig($_c) {
         'groups' => isset($c['groups']) ? max(1, min(255, (int) $c['groups'])) : 1,
         'k'      => $k,
         /* Adresse IPv4 d'un WLED à suivre par WebSocket, port facultatif. */
-        /* Copie en direct : '', 'average' (une couleur) ou 'spread' (une
-         * par segment, 'segs' au plus). */
+        /* Copie en direct : '', 'average' (une couleur) ou 'spread' (la
+         * bande répartie selon 'layout'). */
         'mirror' => (isset($c['mirror']) && in_array($c['mirror'], array('average', 'spread'), true)) ? $c['mirror'] : '',
-        'segs'   => isset($c['segs']) ? max(0, min(32, (int) $c['segs'])) : 0,
+        /* Disposition du flux : n segments pour la bande, m pour l'ambiance. */
+        'layout' => (isset($c['layout']['strip'], $c['layout']['ambient']) && (int) $c['layout']['strip'] >= 1
+                     && (int) $c['layout']['strip'] + (int) $c['layout']['ambient'] <= 32)
+                    ? array('strip' => (int) $c['layout']['strip'], 'ambient' => max(0, (int) $c['layout']['ambient'])) : null,
+        'reverse' => !empty($c['reverse']),
         'follow' => (isset($c['follow']) && preg_match('/^\d{1,3}(\.\d{1,3}){3}(:\d{1,5})?$/', (string) $c['follow'])) ? (string) $c['follow'] : '',
     );
 }
@@ -921,8 +925,9 @@ function gvFollowLive($_addr, $_data) {
         if ($d['wled']['follow'] !== $_addr || $d['wled']['mirror'] === '' || $d['online'] === false || $now < $d['quietUntil']) {
             continue;
         }
-        $segments = ($d['wled']['mirror'] === 'spread' && $d['wled']['segs'] > 1) ? $d['wled']['segs'] : 1;
-        $colors = wledLiveColors($_data, $segments);
+        $layout = ($d['wled']['mirror'] === 'spread' && $d['wled']['layout'] !== null)
+            ? $d['wled']['layout'] : array('strip' => 1, 'ambient' => 0);
+        $colors = wledLiveFrame($_data, $layout, $d['wled']['reverse']);
         if ($colors === null) {
             continue;
         }

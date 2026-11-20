@@ -1,5 +1,14 @@
 # Changelog — plugin Govee LAN
 
+## 0.4.2 (beta)
+
+- Copie en direct plus naturelle sur le H60B0 : la bande tourne autour de
+  l'anneau (6 portions) et le haut prend l'ambiance de toute la bande
+  (disposition relevée sur la lampe ; le bas n'est pas pilotable).
+- Couleurs mélangées en lumière linéaire, pondérées par l'éclat, remontées
+  vers la LED la plus vive : plus de teintes ternes ni d'étincelles
+  perdues. Option « Inverser le sens de rotation ».
+
 ## 0.4.1 (beta)
 
 - Commandes WLED pour les scénarios : suivre / ne plus suivre le WLED (sans

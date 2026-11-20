@@ -194,11 +194,12 @@ $eqLogics = eqLogic::byType($plugin->getId());
 									<select class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="wled_mirror">
 										<option value="">{{Non}}</option>
 										<option value="average">{{Couleur moyenne du WLED}}</option>
-										<option value="spread">{{Répartie sur la lampe (bas → haut)}}</option>
+										<option value="spread">{{Répartie sur la lampe (anneau + haut)}}</option>
 									</select>
+									<label class="checkbox-inline" style="margin-top:6px;"><input type="checkbox" class="eqLogicAttr" data-l1key="configuration" data-l2key="wled_mirror_reverse"> {{Inverser le sens de rotation}}</label>
 								</div>
 								<div class="col-sm-4">
-									<span class="help-block" style="margin:0;">{{La lampe rejoue en temps réel les couleurs des LED du WLED suivi (tous ses effets, 20 images par seconde). « Répartie » découpe la bande sur les segments de la lampe (H60B0 : 7, du bas vers le haut) ; les autres modèles prennent la couleur moyenne. Le WLED ne donne son aperçu qu'à un seul client : ouvrir sa vue « Peek » dans un navigateur interrompt la copie.}}</span>
+									<span class="help-block" style="margin:0;">{{La lampe rejoue en temps réel les couleurs des LED du WLED suivi (tous ses effets, 20 images par seconde). « Répartie » fait tourner la bande autour de l'anneau (6 portions) et donne au haut l'ambiance de toute la bande (H60B0) ; les autres modèles prennent la couleur moyenne. Le WLED ne donne son aperçu qu'à un seul client : ouvrir sa vue « Peek » dans un navigateur interrompt la copie.}}</span>
 								</div>
 							</div>
 							<div class="form-group">
