@@ -1,5 +1,16 @@
 # Changelog — plugin Govee LAN
 
+## 0.4.3 (beta)
+
+- Copie en direct robuste aux coupures du WLED suivi : un WLED (surtout un
+  ESP8266, limité à trois clients WebSocket) éjecte un client à chaque
+  appli ou page WLED ouverte. La lampe garde sa dernière image 15 s et se
+  reconnecte en 1,5 s, au lieu de repasser aussitôt à son état d'avant
+  (souvent du blanc) et d'attendre de plus en plus longtemps.
+- Une copie vraiment interrompue est signalée au niveau « error ». La page
+  Santé compte les coupures de la dernière heure, avec l'heure et la raison
+  de la dernière.
+
 ## 0.4.2 (beta)
 
 - Copie en direct plus naturelle sur le H60B0 : la bande tourne autour de

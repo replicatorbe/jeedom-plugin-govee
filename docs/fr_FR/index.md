@@ -137,7 +137,11 @@ Jeedom.
 - Avec **Annoncer aux WLED**, le WLED suivi reçoit aussi les changements de
   la lampe (couleur fixe, luminosité, allumage).
 - Un ESP8266 n'accepte que trois clients WebSocket : le plugin WLED en
-  prend un, la lampe un autre.
+  prend un, la lampe un autre. Chaque appli ou page WLED ouverte en plus
+  éjecte le client le plus ancien. La lampe se reconnecte alors en
+  1,5 s et garde sa dernière image pendant 15 s ; au-delà seulement, la
+  copie s'arrête et la lampe retrouve son état d'avant. La page Santé
+  compte les coupures de la dernière heure.
 
 ### Commandes WLED
 

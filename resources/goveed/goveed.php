@@ -661,6 +661,17 @@ function gvWledSend($_ip, $_status, $_groups) {
 
 $follows = array();     /* [adresse du WLED] => connexion */
 
+/* Un WLED (surtout un ESP8266, limité à trois clients WebSocket) coupe
+ * souvent la connexion : chaque appli ou page WLED ouverte éjecte le client
+ * le plus ancien. Une coupure après une connexion qui a tenu FOLLOW_STABLE
+ * secondes est donc une éjection, pas une panne : nouvel essai après
+ * FOLLOW_RETRY secondes. Pendant FOLLOW_GRACE secondes, la lampe garde sa
+ * dernière image ; ensuite seulement, la copie s'arrête et la lampe retrouve
+ * son état d'avant. */
+const FOLLOW_STABLE = 10;
+const FOLLOW_RETRY = 1.5;
+const FOLLOW_GRACE = 15;
+
 function gvFollowSync() {
     global $devices, $follows;
     $wanted = array();
@@ -676,7 +687,8 @@ function gvFollowSync() {
             $follows[$addr] = array('addr' => $addr, 'host' => $parts[0], 'port' => isset($parts[1]) ? (int) $parts[1] : 80,
                 'sock' => null, 'state' => 'idle', 'buf' => '', 'frag' => null, 'out' => '', 'accept' => '',
                 'fails' => 0, 'down' => false, 'next' => $now, 'last' => $now, 'pingAt' => $now, 'openedAt' => 0,
-                'deadline' => 0, 'ref' => null, 'seg' => 0, 'on' => false, 'live' => false, 'liveAt' => -INF, 'liveAskedAt' => -INF);
+                'deadline' => 0, 'ref' => null, 'seg' => 0, 'on' => false, 'live' => false, 'liveAt' => -INF, 'liveAskedAt' => -INF,
+                'lostAt' => 0, 'why' => '', 'drops' => array());
         }
     }
     foreach (array_keys($follows) as $addr) {
@@ -698,8 +710,16 @@ function gvFollowClose(&$_c, $_why) {
         @fclose($_c['sock']);
     }
     $now = gvClock();
-    $stable = $_c['state'] === 'open' && $now - $_c['openedAt'] >= 60;
-    $_c['fails'] = $stable ? 1 : $_c['fails'] + 1;
+    $evicted = $_c['state'] === 'open' && $now - $_c['openedAt'] >= FOLLOW_STABLE;
+    $_c['fails'] = $evicted ? 0 : $_c['fails'] + 1;
+    if ($_c['state'] === 'open') {
+        /* Coupures de la dernière heure, pour la page Santé. */
+        $_c['drops'][] = time();
+    }
+    $_c['why'] = $_why;
+    if ($_c['lostAt'] === 0) {
+        $_c['lostAt'] = $now;
+    }
     $_c['sock'] = null;
     $_c['state'] = 'idle';
     $_c['buf'] = '';
@@ -707,13 +727,29 @@ function gvFollowClose(&$_c, $_why) {
     $_c['out'] = '';
     $_c['ref'] = null;
     $_c['live'] = false;
-    $_c['next'] = $now + min(120, 5 * (1 << min(5, $_c['fails'] - 1)));
-    gvRazerStopFollowers($_c['addr'], true);
-    if (!$_c['down']) {
-        $_c['down'] = true;
-        gvLog('warning', 'WLED ' . $_c['addr'] . ' : connexion perdue (' . $_why . '), nouvel essai en s\'espaçant');
+    $delay = $evicted ? FOLLOW_RETRY : min(120, 5 * (1 << min(5, $_c['fails'] - 1)));
+    $_c['next'] = $now + $delay;
+    gvLog($evicted ? 'info' : 'debug', 'WLED ' . $_c['addr'] . ' : connexion coupée (' . $_why . '), nouvel essai dans ' . $delay . ' s');
+}
+
+/* Un WLED injoignable depuis FOLLOW_GRACE secondes : signalé une fois, et
+ * les lampes qui le copiaient retrouvent leur état d'avant. */
+function gvFollowLost(&$_c, $_now) {
+    global $devices;
+    if ($_c['state'] === 'open' || $_c['lostAt'] === 0 || $_c['down'] || $_now - $_c['lostAt'] < FOLLOW_GRACE) {
+        return;
+    }
+    $_c['down'] = true;
+    $copying = false;
+    foreach ($devices as $d) {
+        $copying = $copying || ($d['wled']['follow'] === $_c['addr'] && $d['razer']);
+    }
+    if ($copying) {
+        gvLog('error', 'WLED ' . $_c['addr'] . ' injoignable depuis ' . FOLLOW_GRACE . ' s (' . $_c['why'] . ') : copie en direct interrompue, '
+            . count($_c['drops']) . ' coupure(s) dans la dernière heure');
+        gvRazerStopFollowers($_c['addr'], true);
     } else {
-        gvLog('debug', 'WLED ' . $_c['addr'] . ' : ' . $_why);
+        gvLog('warning', 'WLED ' . $_c['addr'] . ' injoignable (' . $_c['why'] . '), nouvel essai en s\'espaçant');
     }
 }
 
@@ -741,6 +777,10 @@ function gvFollowTick() {
     $read = array();
     $write = array();
     foreach ($follows as $addr => &$c) {
+        $c['drops'] = array_values(array_filter($c['drops'], function ($_t) {
+            return $_t > time() - 3600;
+        }));
+        gvFollowLost($c, $now);
         if ($c['state'] === 'idle' && $now >= $c['next']) {
             $sock = @stream_socket_client('tcp://' . $c['host'] . ':' . $c['port'], $errno, $error, 0,
                 STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT);
@@ -776,10 +816,6 @@ function gvFollowTick() {
                 if ($c['state'] !== 'open') {
                     continue;
                 }
-            }
-            if ($c['state'] === 'open' && $c['down'] && $now - $c['openedAt'] >= 60) {
-                $c['down'] = false;
-                gvLog('info', 'WLED ' . $addr . ' : connexion rétablie');
             }
             $read[$addr] = $c['sock'];
             if ($c['out'] !== '') {
@@ -839,7 +875,11 @@ function gvFollowReadable($_addr) {
         $c['state'] = 'open';
         $c['openedAt'] = gvClock();
         $c['pingAt'] = gvClock();
-        if ($c['fails'] === 0) {
+        $c['lostAt'] = 0;
+        if ($c['down']) {
+            $c['down'] = false;
+            gvLog('warning', 'WLED ' . $_addr . ' : connexion rétablie');
+        } elseif (empty($c['drops'])) {
             gvLog('info', 'WLED ' . $_addr . ' suivi par WebSocket');
         }
     }
@@ -1688,6 +1728,9 @@ function gvHandle($_client, $_line) {
                     'online'  => $d['online'],
                     'follow'  => $addr,
                     'link'    => $f === null ? null : $f['state'],
+                    'drops'   => $f === null ? 0 : count($f['drops']),
+                    'dropAt'  => ($f === null || empty($f['drops'])) ? 0 : end($f['drops']),
+                    'why'     => $f === null ? '' : $f['why'],
                     'mirror'  => $d['wled']['mirror'],
                     'razer'   => $d['razer'],
                     'api'     => $d['api'] === null ? null : array('port' => $d['api']['port'], 'listening' => isset($apis[$ip]),

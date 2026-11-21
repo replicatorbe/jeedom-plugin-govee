@@ -196,10 +196,16 @@ class govee extends eqLogic {
         $follow = array('ok' => array(), 'ko' => array());
         $api = array('ok' => array(), 'ko' => array());
         $sync = false;
+        $drops = array();
         foreach ($status['devices'] as $d) {
             $name = isset($names[(int) $d['eq']]) ? $names[(int) $d['eq']] : $d['ip'];
             if ($d['follow'] !== '') {
                 $text = $name . ' → ' . $d['follow'] . ($d['razer'] ? ' (' . __('copie en cours', __FILE__) . ')' : ($d['mirror'] !== '' ? ' (' . __('copie prête', __FILE__) . ')' : ''));
+                if (!empty($d['drops'])) {
+                    $text .= ', ' . sprintf(__('%d coupure(s) dans la dernière heure, la dernière à %s (%s)', __FILE__),
+                        (int) $d['drops'], date('H:i', (int) $d['dropAt']), (string) $d['why']);
+                    $drops[] = (int) $d['drops'];
+                }
                 $follow[$d['link'] === 'open' ? 'ok' : 'ko'][] = $text;
             }
             if (is_array($d['api'])) {
@@ -220,8 +226,9 @@ class govee extends eqLogic {
             $rows[] = array(
                 'test'   => __('Suivi WLED', __FILE__),
                 'result' => empty($follow['ko']) ? $list($follow['ok']) : __('Injoignable :', __FILE__) . ' ' . $list($follow['ko']),
-                'advice' => empty($follow['ko']) ? '' : __('WLED allumé et sur le réseau ? Un ESP8266 n\'accepte que trois clients WebSocket (plugin WLED, appli, navigateur…).', __FILE__),
-                'state'  => empty($follow['ko']),
+                'advice' => !empty($follow['ko']) ? __('WLED allumé et sur le réseau ? Un ESP8266 n\'accepte que trois clients WebSocket (plugin WLED, appli, navigateur…).', __FILE__)
+                    : (!empty($drops) ? __('Le WLED coupe la connexion : un ESP8266 n\'accepte que trois clients WebSocket, et chaque appli ou page WLED ouverte éjecte le plus ancien. La lampe garde sa dernière image 15 s, le temps de se reconnecter.', __FILE__) : ''),
+                'state'  => empty($follow['ko']) && max(array_merge(array(0), $drops)) < 10,
             );
         }
         if (!empty($api['ok']) || !empty($api['ko'])) {
